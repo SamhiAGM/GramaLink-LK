@@ -53,7 +53,7 @@ class EventRoutingSecurityTest {
                 }
             }
             for (int number = 0; number < clientRequests; number++) {
-                expectedTypes.put("client-" + number, MessageType.ERROR);
+                expectedTypes.put("client-" + number, MessageType.ACK);
             }
 
             var workers = Executors.newFixedThreadPool(pushWorkers + 2);
@@ -69,8 +69,8 @@ class EventRoutingSecurityTest {
                         assertNotNull(message, "Socket must remain open until all frames arrive.");
                         assertEquals(expectedTypes.get(message.correlationId()), message.type());
                         assertTrue(received.add(message.correlationId()), "Frames must not be duplicated.");
-                        if (message.type() == MessageType.ERROR) {
-                            assertEquals("NOT_IMPLEMENTED", message.payload().path("code").asText());
+                        if (message.type() == MessageType.ACK) {
+                            assertEquals("HEARTBEAT", message.payload().path("acknowledgedType").asText());
                         } else {
                             assertEquals(message.correlationId(), message.payload().path("eventId").asText());
                             assertEquals("x".repeat(1024), message.payload().path("text").asText());

@@ -2,6 +2,7 @@ package lk.gramalink.server;
 
 import java.io.IOException;
 import java.net.BindException;
+import java.time.Duration;
 
 /** Command-line entry point for the GramaLink TCP server. */
 public final class ServerMain {
@@ -21,9 +22,21 @@ public final class ServerMain {
             return;
         }
 
+        final Duration heartbeatTimeout;
+        final Duration heartbeatCheckInterval;
+        try {
+            heartbeatTimeout = secondsProperty("gramalink.heartbeat.timeoutSeconds", HeartbeatMonitor.DEFAULT_TIMEOUT);
+            heartbeatCheckInterval = secondsProperty("gramalink.heartbeat.checkIntervalSeconds",
+                    HeartbeatMonitor.DEFAULT_CHECK_INTERVAL);
+        } catch (IllegalArgumentException exception) {
+            System.err.println("Invalid heartbeat configuration: " + exception.getMessage());
+            System.exit(1);
+            return;
+        }
+
         final NetworkServer server;
         try {
-            server = new NetworkServer(port);
+            server = new NetworkServer(port, new SessionManager(), heartbeatTimeout, heartbeatCheckInterval);
         } catch (BindException exception) {
             System.err.println("Unable to start GramaLink Server on port " + port
                     + ": port is already in use or unavailable. " + exception.getMessage());
@@ -49,6 +62,24 @@ public final class ServerMain {
         } catch (IOException exception) {
             System.err.println("GramaLink Server listener failed: " + exception.getMessage());
             System.exit(1);
+        }
+    }
+
+    private static Duration secondsProperty(String name, Duration defaultValue) {
+        String value = System.getProperty(name);
+        if (value == null) {
+            return defaultValue;
+        }
+        try {
+            long seconds = Long.parseLong(value);
+            if (seconds <= 0) {
+                throw new IllegalArgumentException();
+            }
+            Duration duration = Duration.ofSeconds(seconds);
+            duration.toNanos();
+            return duration;
+        } catch (IllegalArgumentException | ArithmeticException exception) {
+            throw new IllegalArgumentException(name + " must be positive whole seconds within the supported range.");
         }
     }
 

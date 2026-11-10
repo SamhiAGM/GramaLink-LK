@@ -38,6 +38,11 @@ public final class JsonUtil {
 
     /** Returns null only if EOF occurs before the next header starts. */
     public static Message readMessage(DataInputStream input) throws IOException {
+        Integer length = readLength(input);
+        return length == null ? null : readPayload(input, length);
+    }
+
+    static Integer readLength(DataInputStream input) throws IOException {
         int first = input.read();
         if (first == -1) {
             return null;
@@ -45,12 +50,14 @@ public final class JsonUtil {
 
         // Reading the first byte separately distinguishes clean EOF from truncation.
         // readUnsignedByte throws EOFException if the remaining header is incomplete.
-        int length = (first << 24)
+        return (first << 24)
                 | (input.readUnsignedByte() << 16)
                 | (input.readUnsignedByte() << 8)
                 | input.readUnsignedByte();
-        validateLength(length);
+    }
 
+    static Message readPayload(DataInputStream input, int length) throws IOException {
+        validateLength(length);
         byte[] bytes = new byte[length];
         input.readFully(bytes);
         return deserialize(bytes);

@@ -60,7 +60,7 @@ class SessionLifecycleTest {
             assertTrue(sessions.isOnline(VERIFIED_USER.userId()));
             assertEquals(second.serverSide,
                     sessions.findOnlineSessions(VERIFIED_USER.userId()).getFirst().connection());
-            assertNotImplemented(second.exchange(new Message(MessageType.HEARTBEAT,
+            assertHeartbeatAcknowledged(second.exchange(new Message(MessageType.HEARTBEAT,
                     JsonNodeFactory.instance.objectNode())));
 
             second.client.shutdownOutput();
@@ -96,7 +96,7 @@ class SessionLifecycleTest {
         var sessions = new SessionManager();
         try (Connection connection = new Connection(sessions)) {
             sessions.registerVerifiedSession(VERIFIED_USER, connection.serverSide);
-            assertNotImplemented(connection.exchange(new Message(MessageType.HEARTBEAT,
+            assertHeartbeatAcknowledged(connection.exchange(new Message(MessageType.HEARTBEAT,
                     JsonNodeFactory.instance.objectNode())));
 
             connection.output.writeInt(100);
@@ -114,6 +114,12 @@ class SessionLifecycleTest {
         assertNotNull(response);
         assertEquals(MessageType.ERROR, response.type());
         assertEquals("NOT_IMPLEMENTED", response.payload().path("code").asText());
+    }
+
+    private static void assertHeartbeatAcknowledged(Message response) {
+        assertNotNull(response);
+        assertEquals(MessageType.ACK, response.type());
+        assertEquals("HEARTBEAT", response.payload().path("acknowledgedType").asText());
     }
 
     private static final class Connection implements AutoCloseable {
