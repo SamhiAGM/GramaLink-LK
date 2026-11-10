@@ -1,0 +1,74 @@
+package lk.gramalink.server;
+
+import java.io.IOException;
+import java.net.BindException;
+
+/** Command-line entry point for the GramaLink TCP server. */
+public final class ServerMain {
+    private static final int DEFAULT_PORT = 5000;
+
+    private ServerMain() {
+    }
+
+    public static void main(String[] args) {
+        final int port;
+        try {
+            port = parsePort(args);
+        } catch (IllegalArgumentException exception) {
+            System.err.println("Invalid port: " + exception.getMessage());
+            System.err.println("Usage: java -cp target/classes lk.gramalink.server.ServerMain [port]");
+            System.exit(1);
+            return;
+        }
+
+        final NetworkServer server;
+        try {
+            server = new NetworkServer(port);
+        } catch (BindException exception) {
+            System.err.println("Unable to start GramaLink Server on port " + port
+                    + ": port is already in use or unavailable. " + exception.getMessage());
+            System.exit(1);
+            return;
+        } catch (IOException exception) {
+            System.err.println("Unable to start GramaLink Server on port " + port
+                    + ": " + exception.getMessage());
+            System.exit(1);
+            return;
+        }
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            try {
+                server.close();
+            } catch (IOException exception) {
+                System.err.println("Unable to close server socket: " + exception.getMessage());
+            }
+        }, "gramalink-shutdown"));
+
+        try (server) {
+            server.start();
+        } catch (IOException exception) {
+            System.err.println("GramaLink Server listener failed: " + exception.getMessage());
+            System.exit(1);
+        }
+    }
+
+    private static int parsePort(String[] args) {
+        if (args.length > 1) {
+            throw new IllegalArgumentException("Expected at most one port argument.");
+        }
+        if (args.length == 0) {
+            return DEFAULT_PORT;
+        }
+
+        final int port;
+        try {
+            port = Integer.parseInt(args[0]);
+        } catch (NumberFormatException exception) {
+            throw new IllegalArgumentException("Use a whole number between 1 and 65535.");
+        }
+        if (port < 1 || port > 65535) {
+            throw new IllegalArgumentException("Port must be between 1 and 65535.");
+        }
+        return port;
+    }
+}
