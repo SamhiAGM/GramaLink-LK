@@ -65,6 +65,14 @@ public final class NetworkServer implements Closeable {
         }
     }
 
+    /** Test fixture: ownership of an already-bound loopback listener transfers to this server. */
+    NetworkServer(ServerSocket listener, SessionManager sessionManager, HeartbeatMonitor heartbeatMonitor) {
+        this.serverSocket = Objects.requireNonNull(listener, "Listener is required.");
+        this.sessionManager = Objects.requireNonNull(sessionManager, "Session manager is required.");
+        this.heartbeatMonitor = Objects.requireNonNull(heartbeatMonitor, "Heartbeat monitor is required.");
+        this.fileTransferService = FileTransferService.unavailable();
+    }
+
     public void start() throws IOException {
         synchronized (lifecycleLock) {
             if (stopping) {
