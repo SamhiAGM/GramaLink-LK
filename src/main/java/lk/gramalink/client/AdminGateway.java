@@ -6,14 +6,18 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** Administrative boundary on the login NetworkClient. Server authorization is always final. */
 public final class AdminGateway implements AdminWorkspace, AutoCloseable {
     public interface Listener {
+        default void onRecovery(ClientReliability.State state) { }
         default void onUpdate(AdminData.Update update) { }
         default void onStatus(NetworkClient.Status status) { }
         default void onError(String message) { }
     }
+    private final Object authorizationLock = new Object();
+    private final AtomicLong sessionEpoch = new AtomicLong();
     private final NetworkClient client;
     private final AdminProtocol protocol;
     private final Executor callbacks;
@@ -35,29 +39,57 @@ public final class AdminGateway implements AdminWorkspace, AutoCloseable {
     }
     // LoginService calls this only from the correlation-matched LOGIN future.
     void acceptLoginReply(Message reply) {
-        identity = null; clearState();
-        if (!closed && connected && reply.type() == MessageType.LOGIN_OK) identity = protocol.administratorAuthorization(reply).orElse(null);
+        final long epoch;
+        synchronized (authorizationLock) { epoch = sessionEpoch.incrementAndGet(); identity = null; }
+        clearState();
+        if (!closed && connected && reply.type() == MessageType.LOGIN_OK) {
+            AdminData.Identity verified = protocol.administratorAuthorization(reply).orElse(null);
+            synchronized (authorizationLock) {
+                if (!closed && connected && sessionEpoch.get() == epoch) identity = verified;
+            }
+        }
     }
     void connectionStatus(NetworkClient.Status status) {
-        connected = status == NetworkClient.Status.CONNECTED;
-        if (!connected) { identity = null; clearState(); }
+        synchronized (authorizationLock) {
+            sessionEpoch.incrementAndGet();
+            connected = status == NetworkClient.Status.CONNECTED;
+            identity = null; // A new TCP connection never inherits role authorization.
+        }
+        if (!connected) clearState();
         publish(target -> target.onStatus(status));
     }
+    void transportError(String message) { publish(target -> target.onError(message)); }
+    void recoveryState(ClientReliability.State state) {
+        if (state != ClientReliability.State.ONLINE) {
+            synchronized (authorizationLock) { sessionEpoch.incrementAndGet(); identity = null; }
+            clearState();
+        }
+        publish(target -> target.onRecovery(state));
+    }
     void incoming(Message message) {
-        if (!isAdministratorAuthorized() || message.type() == MessageType.LOGIN_OK || !protocol.eventTypes().contains(message.type())) return;
+        if (!isAdministratorAuthorized()) return;
+        final long epoch = sessionEpoch.get();
+        if (message.type() == MessageType.ACK) return; // Transport receipt is not persistence.
+        if (message.type() == MessageType.ERROR) {
+            publish(epoch, true, target -> target.onError(LoginService.describe(message))); return;
+        }
+        if (message.type() == MessageType.LOGIN_OK || !protocol.eventTypes().contains(message.type())) return;
         task(() -> {
-            if (!isAdministratorAuthorized()) return null;
+            if (!isAdministratorAuthorized() || sessionEpoch.get() != epoch) return null;
             try {
+                if (!protocol.acceptsEvent(message)) return null;
                 protocol.decodeEvent(message).ifPresent(update -> {
-                    if (!isAdministratorAuthorized()) return;
+                    synchronized (authorizationLock) {
+                        if (!isAdministratorAuthorized() || sessionEpoch.get() != epoch) return;
                     synchronized (stateLock) {
                         if (update instanceof AdminData.Users snapshot) { users.clear(); snapshot.rows().forEach(row -> users.put(row.id(), row)); }
                         else if (update instanceof AdminData.Offices snapshot) { offices.clear(); snapshot.rows().forEach(row -> offices.put(row.id(), row)); }
                         else if (update instanceof AdminData.Catalogues snapshot) catalogues = snapshot;
                     }
-                    publish(target -> { if (isAdministratorAuthorized()) target.onUpdate(update); });
+                    }
+                    publish(epoch, true, target -> target.onUpdate(update));
                 });
-            } catch (RuntimeException error) { publish(target -> target.onError("The administrative update could not be read. No local record or statistic was changed.")); }
+            } catch (RuntimeException error) { publish(epoch, true, target -> target.onError("The administrative update could not be read. No local record or statistic was changed.")); }
             return null;
         });
     }
@@ -74,12 +106,15 @@ public final class AdminGateway implements AdminWorkspace, AutoCloseable {
         Objects.requireNonNull(command);
         if (!isAdministratorAuthorized()) return CompletableFuture.failedFuture(new SecurityException("Administrator authorization is required."));
         if (!supports(command.operation())) return CompletableFuture.failedFuture(AdminProtocol.pending());
+        final long commandEpoch = sessionEpoch.get();
         return task(() -> {
+            requireEpoch(commandEpoch);
             validate(command);
             Message outbound = protocol.encode(command);
             if (NON_ADMIN_COMMANDS.contains(outbound.type()) || !protocol.outboundTypes(command.operation()).contains(outbound.type()))
                 throw new IllegalArgumentException("The administrative wire operation is not agreed for this action.");
             validate(command);
+            requireEpoch(commandEpoch);
             return client.request(outbound, Duration.ofSeconds(10));
         }).thenCompose(reply -> reply);
     }
@@ -103,7 +138,7 @@ public final class AdminGateway implements AdminWorkspace, AutoCloseable {
                 throw new IllegalArgumentException("Reload the backend office-type catalogue before submitting.");
         }
     }
-    public CompletableFuture<Void> disconnect() { identity = null; clearState(); return task(() -> { client.disconnect(); return null; }); }
+    public CompletableFuture<Void> disconnect() { synchronized (authorizationLock) { sessionEpoch.incrementAndGet(); identity = null; } clearState(); return task(() -> { client.disconnect(); return null; }); }
     private void clearState() { synchronized (stateLock) { users.clear(); offices.clear(); catalogues = new AdminData.Catalogues(List.of(), List.of()); } }
     @FunctionalInterface private interface Work<T> { T run() throws IOException; }
     private <T> CompletableFuture<T> task(Work<T> work) {
@@ -112,8 +147,16 @@ public final class AdminGateway implements AdminWorkspace, AutoCloseable {
             try { return work.run(); } catch (IOException error) { throw new CompletionException(error); }
         }, worker); } catch (RejectedExecutionException error) { return CompletableFuture.failedFuture(error); }
     }
-    private void publish(Consumer<Listener> event) {
-        Listener target = listener; callbacks.execute(() -> { if (!closed && listener == target) event.accept(target); });
+    private void requireEpoch(long epoch) {
+        if (sessionEpoch.get() != epoch) throw new SecurityException("Authorization session changed; pending operations are not replayed.");
     }
-    @Override public void close() { closed = true; identity = null; listener = new Listener() { }; clearState(); worker.shutdown(); }
+    private void publish(Consumer<Listener> event) { publish(sessionEpoch.get(), false, event); }
+    private void publish(long epoch, boolean requireAuthorization, Consumer<Listener> event) {
+        Listener target = listener;
+        callbacks.execute(() -> {
+            if (!closed && listener == target && sessionEpoch.get() == epoch
+                    && (!requireAuthorization || isAdministratorAuthorized())) event.accept(target);
+        });
+    }
+    @Override public void close() { synchronized (authorizationLock) { sessionEpoch.incrementAndGet(); closed = true; identity = null; } listener = new Listener() { }; clearState(); worker.shutdown(); }
 }

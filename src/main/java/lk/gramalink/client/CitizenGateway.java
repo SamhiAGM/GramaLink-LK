@@ -8,14 +8,18 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** Uses the login connection. Never opens another socket or constructs backend payloads. */
 public final class CitizenGateway implements CitizenWorkspace, AutoCloseable {
     public interface Listener {
+        default void onRecovery(ClientReliability.State state) { }
         default void onUpdate(CitizenData.Update update) { }
         default void onStatus(NetworkClient.Status status) { }
         default void onError(String message) { }
     }
+    private final Object authorizationLock = new Object();
+    private final AtomicLong sessionEpoch = new AtomicLong();
     private final NetworkClient client;
     private final CitizenProtocol protocol;
     private final Executor callbacks;
@@ -37,30 +41,56 @@ public final class CitizenGateway implements CitizenWorkspace, AutoCloseable {
 
     // Called only by LoginService on its correlation-matched LOGIN future, never from unsolicited events.
     void acceptLoginReply(Message reply) {
-        identity = null;
+        final long epoch;
+        synchronized (authorizationLock) { epoch = sessionEpoch.incrementAndGet(); identity = null; }
         if (!closed && connected && reply.type() == MessageType.LOGIN_OK) {
-            identity = protocol.citizenAuthorization(reply).orElse(null);
+            CitizenData.Identity verified = protocol.citizenAuthorization(reply).orElse(null);
+            synchronized (authorizationLock) {
+                if (!closed && connected && sessionEpoch.get() == epoch) identity = verified;
+            }
         }
     }
-
     void connectionStatus(NetworkClient.Status status) {
-        connected = status == NetworkClient.Status.CONNECTED;
-        if (!connected) identity = null;
+        synchronized (authorizationLock) {
+            sessionEpoch.incrementAndGet();
+            connected = status == NetworkClient.Status.CONNECTED;
+            identity = null; // A new TCP connection never inherits role authorization.
+        }
         publish(target -> target.onStatus(status));
     }
-
+    void transportError(String message) { publish(target -> target.onError(message)); }
+    void recoveryState(ClientReliability.State state) {
+        if (state != ClientReliability.State.ONLINE) {
+            synchronized (authorizationLock) { sessionEpoch.incrementAndGet(); identity = null; }
+        }
+        publish(target -> target.onRecovery(state));
+    }
     /** Receiver entry point; decode work stays off the UI thread. */
     void incoming(Message message) {
-        if (closed || !isCitizenAuthorized()) return;
+        if (!isCitizenAuthorized()) return;
+        final long epoch = sessionEpoch.get();
+        if (message.type() == MessageType.ACK) return; // Transport receipt is not persistence.
+        if (message.type() == MessageType.ERROR) {
+            publish(epoch, true, target -> target.onError(LoginService.describe(message))); return;
+        }
         if (message.type() != MessageType.NEW_REQUEST && message.type() != MessageType.REQUEST_UPDATED
                 && message.type() != MessageType.NOTIFICATION && message.type() != MessageType.CHAT_MESSAGE) return;
         try {
             worker.execute(() -> {
-                if (!isCitizenAuthorized()) return;
-                try { protocol.decodeEvent(message).ifPresent(update -> publish(target -> target.onUpdate(update))); }
-                catch (RuntimeException error) { publish(target -> target.onError("The server event could not be read.")); }
+                if (!isCitizenAuthorized() || sessionEpoch.get() != epoch) return;
+                try { if (!protocol.acceptsEvent(message)) return; protocol.decodeEvent(message).ifPresent(update -> publish(epoch, true, target -> target.onUpdate(update))); }
+                catch (RuntimeException error) { publish(epoch, true, target -> target.onError("The server event could not be read.")); }
             });
         } catch (RejectedExecutionException ignored) { /* Closing revokes access. */ }
+    }
+
+    void transferProgress(FileTransferProgress.Snapshot snapshot) {
+        long epoch = sessionEpoch.get();
+        if (snapshot.state() == FileTransferProgress.State.INCOMPLETE || snapshot.state() == FileTransferProgress.State.FAILED) {
+            publish(epoch, false, target -> target.onError(snapshot.detail()));
+        }
+        if (isCitizenAuthorized()) publish(epoch, true, target -> target.onUpdate(new CitizenData.TransferProgress(
+                snapshot.confirmedBytes(), snapshot.totalBytes(), snapshot.detail(), snapshot.state() == FileTransferProgress.State.TRANSPORT_COMPLETE)));
     }
 
     public boolean isCitizenAuthorized() { return !closed && connected && identity != null; }
@@ -89,11 +119,14 @@ public final class CitizenGateway implements CitizenWorkspace, AutoCloseable {
                                                java.util.function.Supplier<Message> encode, MessageType expected) {
         if (!isCitizenAuthorized()) return CompletableFuture.failedFuture(new SecurityException("Citizen authorization is required."));
         if (!protocol.supports(operation)) return CompletableFuture.failedFuture(CitizenProtocol.pending());
+        final long commandEpoch = sessionEpoch.get();
         return task(() -> {
+            requireEpoch(commandEpoch);
             requireCitizen();
             Message message = encode.get();
             if (message.type() != expected) throw new IllegalArgumentException("Unexpected outbound message type.");
             requireCitizen();
+            requireEpoch(commandEpoch);
             return client.request(message, Duration.ofSeconds(10));
         }).thenCompose(reply -> reply);
     }
@@ -106,7 +139,7 @@ public final class CitizenGateway implements CitizenWorkspace, AutoCloseable {
         });
     }
     public CompletableFuture<Void> disconnect() {
-        identity = null;
+        synchronized (authorizationLock) { sessionEpoch.incrementAndGet(); identity = null; }
         return task(() -> { client.disconnect(); return null; });
     }
     @FunctionalInterface private interface Work<T> { T run() throws IOException; }
@@ -118,9 +151,16 @@ public final class CitizenGateway implements CitizenWorkspace, AutoCloseable {
             }, worker);
         } catch (RejectedExecutionException error) { return CompletableFuture.failedFuture(error); }
     }
-    private void publish(Consumer<Listener> event) {
-        Listener target = listener;
-        callbacks.execute(() -> { if (!closed && listener == target) event.accept(target); });
+    private void requireEpoch(long epoch) {
+        if (sessionEpoch.get() != epoch) throw new SecurityException("Authorization session changed; pending operations are not replayed.");
     }
-    @Override public void close() { closed = true; identity = null; listener = new Listener() { }; worker.shutdown(); }
+    private void publish(Consumer<Listener> event) { publish(sessionEpoch.get(), false, event); }
+    private void publish(long epoch, boolean requireAuthorization, Consumer<Listener> event) {
+        Listener target = listener;
+        callbacks.execute(() -> {
+            if (!closed && listener == target && sessionEpoch.get() == epoch
+                    && (!requireAuthorization || isCitizenAuthorized())) event.accept(target);
+        });
+    }
+    @Override public void close() { synchronized (authorizationLock) { sessionEpoch.incrementAndGet(); closed = true; identity = null; } listener = new Listener() { }; worker.shutdown(); }
 }

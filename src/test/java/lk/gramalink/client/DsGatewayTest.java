@@ -34,6 +34,7 @@ class DsGatewayTest {
             encoded.add(action);
             return message(wrongType != null ? wrongType : action.kind() == DsData.ActionKind.CHAT ? MessageType.CHAT_MESSAGE : MessageType.STATUS_UPDATE);
         }
+        public boolean acceptsEvent(Message message) { return true; }
         public Optional<DsData.Update> decodeEvent(Message message) {
             if (malformed) throw new IllegalArgumentException("Malformed fixture");
             return Optional.ofNullable(next.getAndSet(null));

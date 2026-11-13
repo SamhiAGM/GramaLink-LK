@@ -26,6 +26,8 @@ public final class NetworkClient implements AutoCloseable {
         /** Transport only: the application must validate transfer grants/order before storing data. */
         default void onChunk(FileChunk chunk) { }
         default void onError(Throwable error) { }
+        /** Explicit user/session shutdown, distinct from EOF/IO failure. Must not do blocking work. */
+        default void onDisconnectRequested() { }
     }
 
     private static final class Connection {
@@ -33,8 +35,10 @@ public final class NetworkClient implements AutoCloseable {
         final DataInputStream input;
         final DataOutputStream output;
         final Map<String, CompletableFuture<Message>> pending = new HashMap<>();
-        Connection(Socket socket) throws IOException {
+        final long generation;
+        Connection(Socket socket, long generation) throws IOException {
             this.socket = socket;
+            this.generation = generation;
             input = new DataInputStream(socket.getInputStream());
             output = new DataOutputStream(socket.getOutputStream());
         }
@@ -46,6 +50,7 @@ public final class NetworkClient implements AutoCloseable {
     private final Executor callbacks;
     private final Object lifecycle = new Object();
     private Connection connection;
+    private long generation;
 
     public NetworkClient() { this(DEFAULT_HOST, DEFAULT_PORT); }
     public NetworkClient(String host, int port) { this(host, port, new Listener() { }, Runnable::run); }
@@ -66,18 +71,19 @@ public final class NetworkClient implements AutoCloseable {
         if (millis > Integer.MAX_VALUE) throw new IllegalArgumentException("Connect timeout is too large.");
         synchronized (lifecycle) {
             if (connection != null) throw new IllegalStateException("Already connected.");
+            long attempt = ++generation;
             Socket socket = new Socket();
             try {
                 socket.connect(new InetSocketAddress(host, port), (int) millis);
-                Connection current = new Connection(socket);
+                Connection current = new Connection(socket, attempt);
                 connection = current;
-                dispatch(() -> listener.onStatus(Status.CONNECTED));
+                dispatch(current, true, () -> listener.onStatus(Status.CONNECTED));
                 Thread receiver = new Thread(() -> receive(current), "gramalink-client-receiver");
                 receiver.setDaemon(true);
                 receiver.start();
             } catch (IOException | RuntimeException error) {
                 try { socket.close(); } catch (IOException closeError) { error.addSuppressed(closeError); }
-                dispatch(() -> listener.onError(error));
+                dispatch(() -> { synchronized (lifecycle) { if (generation != attempt) return; } listener.onError(error); });
                 throw error;
             }
         }
@@ -152,9 +158,9 @@ public final class NetworkClient implements AutoCloseable {
                     CompletableFuture<Message> pending;
                     synchronized (lifecycle) { pending = current.pending.remove(message.correlationId()); }
                     if (pending != null) pending.complete(message);
-                    dispatch(() -> listener.onMessage(message));
+                    dispatch(current, true, () -> listener.onMessage(message));
                 } else if (frame instanceof FileChunk chunk) {
-                    dispatch(() -> listener.onChunk(chunk));
+                    dispatch(current, true, () -> listener.onChunk(chunk));
                 }
             }
             finish(current, null);
@@ -174,15 +180,20 @@ public final class NetworkClient implements AutoCloseable {
             reason = error == null ? new EOFException("Connection closed.") : error;
             if (error != null) {
                 IOException reported = error;
-                dispatch(() -> listener.onError(reported));
+                dispatch(current, false, () -> listener.onError(reported));
             }
-            dispatch(() -> listener.onStatus(Status.DISCONNECTED));
+            dispatch(current, false, () -> listener.onStatus(Status.DISCONNECTED));
         }
         // Future continuations are application code; never run them under our lifecycle lock.
         pending.forEach(future -> future.completeExceptionally(reason));
     }
 
     public void disconnect() {
+        try { listener.onDisconnectRequested(); } catch (RuntimeException ignored) { }
+        disconnectForRecovery();
+    }
+
+    void disconnectForRecovery() {
         Connection current;
         synchronized (lifecycle) { current = connection; }
         if (current != null) finish(current, null);
@@ -193,6 +204,13 @@ public final class NetworkClient implements AutoCloseable {
         // UI/listener failures must not terminate the transport receiver.
         try { callbacks.execute(() -> { try { callback.run(); } catch (RuntimeException ignored) { } }); }
         catch (RuntimeException ignored) { }
+    }
+
+    private void dispatch(Connection source, boolean live, Runnable callback) {
+        dispatch(() -> {
+            synchronized (lifecycle) { if (generation != source.generation || (live && connection != source)) return; }
+            callback.run();
+        });
     }
 
     private static long positiveMillis(Duration duration) {

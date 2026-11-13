@@ -24,11 +24,12 @@ public final class LoginController implements AutoCloseable {
     @FXML private VBox inputFields;
     private LoginService service;
     private boolean closed;
+    private long loginEpoch;
 
     @FXML private void initialize() {
         hostField.setText(NetworkClient.DEFAULT_HOST);
         portField.setText(Integer.toString(NetworkClient.DEFAULT_PORT));
-        service = new LoginService(this::updateStatus, Platform::runLater);
+        service = new LoginService(this::updateStatus, Platform::runLater, this::updateRecovery);
     }
 
     @FXML private void login() {
@@ -42,8 +43,9 @@ public final class LoginController implements AutoCloseable {
         busy(true);
         feedbackLabel.setText("Connecting to " + input.host() + ":" + input.port() + "…");
         passwordField.clear();
+        long epoch = ++loginEpoch;
         service.login(input).whenComplete((reply, error) -> Platform.runLater(() -> {
-            if (closed) return;
+            if (closed || loginEpoch != epoch) return;
             busy(false);
             if (error == null) {
                 feedbackLabel.setText(LoginService.describe(reply));
@@ -90,6 +92,7 @@ public final class LoginController implements AutoCloseable {
     }
 
     @FXML private void disconnect() {
+        loginEpoch++;
         busy(true);
         service.disconnect().whenComplete((ignored, error) -> Platform.runLater(() -> {
             if (closed) return;
@@ -109,9 +112,23 @@ public final class LoginController implements AutoCloseable {
         if (closed) return;
         boolean connected = status == NetworkClient.Status.CONNECTED;
         statusLabel.setText(connected ? "Connected to server" : "Disconnected");
-        statusDot.getStyleClass().removeAll("online", "offline");
+        statusDot.getStyleClass().removeAll("online", "offline", "reconnecting");
         statusDot.getStyleClass().add(connected ? "online" : "offline");
     }
 
-    @Override public void close() { closed = true; service.close(); }
+    private void updateRecovery(ClientReliability.State state) {
+        if (closed) return;
+        statusDot.getStyleClass().removeAll("online", "offline", "reconnecting");
+        statusDot.getStyleClass().add(state == ClientReliability.State.ONLINE ? "online"
+                : state == ClientReliability.State.OFFLINE ? "offline" : "reconnecting");
+        statusLabel.setText(switch (state) {
+            case ONLINE -> "Online — authenticated";
+            case RECONNECTING -> "Reconnecting — access locked";
+            case AUTHENTICATION_REQUIRED -> "Connected — fresh sign-in required";
+            case CONNECTING -> "Connecting…";
+            case OFFLINE -> "Offline";
+        });
+    }
+
+    @Override public void close() { closed = true; loginEpoch++; service.close(); }
 }

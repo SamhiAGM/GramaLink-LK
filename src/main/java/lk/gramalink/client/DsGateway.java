@@ -6,14 +6,18 @@ import java.time.Duration;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
+import java.util.concurrent.atomic.AtomicLong;
 
 /** DS operations reuse the authenticated login socket; the server owns every final permission/concurrency decision. */
 public final class DsGateway implements DsWorkspace, AutoCloseable {
     public interface Listener {
+        default void onRecovery(ClientReliability.State state) { }
         default void onUpdate(DsData.Update update) { }
         default void onStatus(NetworkClient.Status status) { }
         default void onError(String message) { }
     }
+    private final Object authorizationLock = new Object();
+    private final AtomicLong sessionEpoch = new AtomicLong();
     private final NetworkClient client;
     private final DsProtocol protocol;
     private final Executor callbacks;
@@ -32,31 +36,57 @@ public final class DsGateway implements DsWorkspace, AutoCloseable {
     }
     // Only the correlation-matched LOGIN future calls this, never unsolicited LOGIN_OK events.
     void acceptLoginReply(Message reply) {
-        identity = null;
+        final long epoch;
+        synchronized (authorizationLock) { epoch = sessionEpoch.incrementAndGet(); identity = null; }
         synchronized (stateLock) { requests.clear(); refreshRequired.clear(); }
-        if (!closed && connected && reply.type() == MessageType.LOGIN_OK) identity = protocol.dsAuthorization(reply).orElse(null);
+        if (!closed && connected && reply.type() == MessageType.LOGIN_OK) {
+            DsData.Identity verified = protocol.dsAuthorization(reply).orElse(null);
+            synchronized (authorizationLock) {
+                if (!closed && connected && sessionEpoch.get() == epoch) identity = verified;
+            }
+        }
     }
     void connectionStatus(NetworkClient.Status status) {
-        connected = status == NetworkClient.Status.CONNECTED;
-        if (!connected) { identity = null; synchronized (stateLock) { requests.clear(); refreshRequired.clear(); } }
+        synchronized (authorizationLock) {
+            sessionEpoch.incrementAndGet();
+            connected = status == NetworkClient.Status.CONNECTED;
+            identity = null; // A new TCP connection never inherits role authorization.
+        }
+        if (!connected) synchronized (stateLock) { requests.clear(); refreshRequired.clear(); }
         publish(target -> target.onStatus(status));
+    }
+    void transportError(String message) { publish(target -> target.onError(message)); }
+    void recoveryState(ClientReliability.State state) {
+        if (state != ClientReliability.State.ONLINE) {
+            synchronized (authorizationLock) { sessionEpoch.incrementAndGet(); identity = null; }
+            synchronized (stateLock) { requests.clear(); refreshRequired.clear(); }
+        }
+        publish(target -> target.onRecovery(state));
     }
     void incoming(Message message) {
         if (!isDsAuthorized()) return;
+        final long epoch = sessionEpoch.get();
+        if (message.type() == MessageType.ACK) return; // Transport receipt is not persistence.
+        if (message.type() == MessageType.ERROR) {
+            publish(epoch, true, target -> target.onError(LoginService.describe(message))); return;
+        }
         if (message.type() != MessageType.REQUEST_UPDATED && message.type() != MessageType.NEW_REQUEST
                 && message.type() != MessageType.NOTIFICATION && message.type() != MessageType.CHAT_MESSAGE) return;
         task(() -> {
-            if (!isDsAuthorized()) return null;
+            if (!isDsAuthorized() || sessionEpoch.get() != epoch) return null;
             try {
+                if (!protocol.acceptsEvent(message)) return null;
                 protocol.decodeEvent(message).ifPresent(update -> {
-                    if (!isDsAuthorized()) return;
+                    synchronized (authorizationLock) {
+                        if (!isDsAuthorized() || sessionEpoch.get() != epoch) return;
                     if (update instanceof DsData.Requests snapshot) synchronized (stateLock) {
                         requests.clear(); snapshot.rows().forEach(row -> requests.put(row.id(), row));
                         refreshRequired.clear();
                     }
-                    publish(target -> { if (isDsAuthorized()) target.onUpdate(update); });
+                    }
+                    publish(epoch, true, target -> target.onUpdate(update));
                 });
-            } catch (RuntimeException error) { publish(target -> target.onError("The DS update could not be read. No local decision was applied.")); }
+            } catch (RuntimeException error) { publish(epoch, true, target -> target.onError("The DS update could not be read. No local decision was applied.")); }
             return null;
         });
     }
@@ -72,12 +102,15 @@ public final class DsGateway implements DsWorkspace, AutoCloseable {
         Objects.requireNonNull(action);
         if (!isDsAuthorized()) return CompletableFuture.failedFuture(new SecurityException("DS Officer authorization is required."));
         if (!protocol.supports(action.kind())) return CompletableFuture.failedFuture(DsProtocol.pending());
+        final long commandEpoch = sessionEpoch.get();
         return task(() -> {
+            requireEpoch(commandEpoch);
             validateCurrent(action);
             Message outbound = protocol.encode(action);
             MessageType expected = action.kind() == DsData.ActionKind.CHAT ? MessageType.CHAT_MESSAGE : MessageType.STATUS_UPDATE;
             if (outbound.type() != expected) throw new IllegalArgumentException("Unsupported DS wire operation.");
             validateCurrent(action);
+            requireEpoch(commandEpoch);
             return client.request(outbound, Duration.ofSeconds(10));
         }).thenCompose(reply -> reply).thenCompose(reply -> task(() -> {
             if (reply.type() == MessageType.ERROR) {
@@ -102,7 +135,7 @@ public final class DsGateway implements DsWorkspace, AutoCloseable {
         }
     }
     public CompletableFuture<Void> disconnect() {
-        identity = null; synchronized (stateLock) { requests.clear(); refreshRequired.clear(); }
+        synchronized (authorizationLock) { sessionEpoch.incrementAndGet(); identity = null; } synchronized (stateLock) { requests.clear(); refreshRequired.clear(); }
         return task(() -> { client.disconnect(); return null; });
     }
     @FunctionalInterface private interface Work<T> { T run() throws IOException; }
@@ -112,11 +145,19 @@ public final class DsGateway implements DsWorkspace, AutoCloseable {
             try { return work.run(); } catch (IOException error) { throw new CompletionException(error); }
         }, worker); } catch (RejectedExecutionException error) { return CompletableFuture.failedFuture(error); }
     }
-    private void publish(Consumer<Listener> event) {
-        Listener target = listener; callbacks.execute(() -> { if (!closed && listener == target) event.accept(target); });
+    private void requireEpoch(long epoch) {
+        if (sessionEpoch.get() != epoch) throw new SecurityException("Authorization session changed; pending operations are not replayed.");
+    }
+    private void publish(Consumer<Listener> event) { publish(sessionEpoch.get(), false, event); }
+    private void publish(long epoch, boolean requireAuthorization, Consumer<Listener> event) {
+        Listener target = listener;
+        callbacks.execute(() -> {
+            if (!closed && listener == target && sessionEpoch.get() == epoch
+                    && (!requireAuthorization || isDsAuthorized())) event.accept(target);
+        });
     }
     @Override public void close() {
-        closed = true; identity = null; listener = new Listener() { };
+        synchronized (authorizationLock) { sessionEpoch.incrementAndGet(); closed = true; identity = null; } listener = new Listener() { };
         synchronized (stateLock) { requests.clear(); refreshRequired.clear(); } worker.shutdown();
     }
 }

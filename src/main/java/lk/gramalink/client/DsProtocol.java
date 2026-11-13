@@ -11,6 +11,8 @@ public interface DsProtocol {
     default boolean requiresVersion(DsData.ActionKind kind) { return kind != DsData.ActionKind.CHAT; }
     /** Must encode expectedVersion using the exact backend field/type when required. */
     default Message encode(DsData.Action action) { throw pending(); }
+    /** Fail closed: validate current-session ownership/scope and the agreed event contract before decoding. */
+    default boolean acceptsEvent(Message message) { return false; }
     default Optional<DsData.Update> decodeEvent(Message message) { return Optional.empty(); }
     static UnsupportedOperationException pending() { return new UnsupportedOperationException("DS integration is waiting for the backend contract."); }
     static DsProtocol pendingBackend() { return new DsProtocol() { }; }

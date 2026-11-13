@@ -110,6 +110,7 @@ class GnGatewayTest {
         BlockingQueue<GnData.Update> updates = new LinkedBlockingQueue<>();
         GnProtocol adapter = new GnProtocol() {
             public Optional<GnData.Identity> gnAuthorization(Message reply) { return fixture().gnAuthorization(reply); }
+            public boolean acceptsEvent(Message message) { return true; }
             public Optional<GnData.Update> decodeEvent(Message message) {
                 assertNotEquals(caller, Thread.currentThread()); decoding.countDown();
                 try { assertTrue(release.await(3, TimeUnit.SECONDS)); }
@@ -131,6 +132,7 @@ class GnGatewayTest {
         BlockingQueue<String> errors = new LinkedBlockingQueue<>();
         GnProtocol adapter = new GnProtocol() {
             public Optional<GnData.Identity> gnAuthorization(Message reply) { return fixture().gnAuthorization(reply); }
+            public boolean acceptsEvent(Message message) { return true; }
             public Optional<GnData.Update> decodeEvent(Message message) { throw new IllegalArgumentException("Malformed fixture"); }
         };
         try (NetworkClient client = new NetworkClient(); GnGateway gateway = new GnGateway(client, adapter, Runnable::run)) {
@@ -162,6 +164,7 @@ class GnGatewayTest {
         java.util.concurrent.atomic.AtomicInteger validations = new java.util.concurrent.atomic.AtomicInteger();
         GnProtocol adapter = new GnProtocol() {
             public Optional<GnData.Identity> gnAuthorization(Message reply) { validations.incrementAndGet(); return fixture().gnAuthorization(reply); }
+            public boolean acceptsEvent(Message message) { return true; }
             public Optional<GnData.Update> decodeEvent(Message message) { return Optional.of(new GnData.Notifications(List.of())); }
         };
         try (ServerSocket listener = new ServerSocket(0);

@@ -46,12 +46,14 @@ public final class CitizenData {
         }
     }
     /** Only an integrated transfer adapter may supply progress; selected files start at zero. */
-    public record TransferProgress(long receivedBytes, long totalBytes, String stage) implements Update {
+    public record TransferProgress(long receivedBytes, long totalBytes, String stage, boolean transportComplete) implements Update {
+        public TransferProgress(long receivedBytes, long totalBytes, String stage) { this(receivedBytes, totalBytes, stage, false); }
         public TransferProgress {
             if (receivedBytes < 0 || totalBytes < 0 || receivedBytes > totalBytes)
                 throw new IllegalArgumentException("Invalid transfer byte count.");
             Objects.requireNonNull(stage);
+            if (transportComplete && receivedBytes != totalBytes) throw new IllegalArgumentException("Transport completion requires the exact authorized byte count.");
         }
-        public double fraction() { return totalBytes == 0 ? 0 : (double) receivedBytes / totalBytes; }
+        public double fraction() { return totalBytes == 0 ? (transportComplete ? 1 : 0) : (double) receivedBytes / totalBytes; }
     }
 }

@@ -37,6 +37,7 @@ public final class DsDashboardController {
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm").withZone(ZoneId.of("Asia/Colombo"));
     private final Map<String, DsData.Details> details = new HashMap<>();
     private final Set<String> refreshRequired = new HashSet<>();
+    private long bindingEpoch;
     private DsWorkspace gateway;
     private Runnable returnToLogin;
     private boolean active, busy, synchronizing;
@@ -78,12 +79,16 @@ public final class DsDashboardController {
         workspace.setDisable(true);
     }
     void attach(DsWorkspace gateway, Runnable returnToLogin) {
-        gateway.requireDsOfficer(); this.gateway = gateway; this.returnToLogin = returnToLogin; active = true;
-        officerName.setText(gateway.identity().orElseThrow().displayName()); status(true); refreshActions();
+        gateway.requireDsOfficer();
+        if (this.gateway != null) this.gateway.setListener(new DsGateway.Listener() { });
+        if (this.gateway != null && this.gateway != gateway) resetView();
+        final long epoch = ++bindingEpoch; this.gateway = gateway; this.returnToLogin = returnToLogin; active = true;
+        officerName.setText(gateway.identity().orElseThrow().displayName()); setBusy(false); status(true); refreshActions();
         gateway.setListener(new DsGateway.Listener() {
-            public void onUpdate(DsData.Update update) { Platform.runLater(() -> { if (active && gateway.isDsAuthorized()) apply(update); }); }
-            public void onStatus(NetworkClient.Status value) { Platform.runLater(() -> { if (active) status(value == NetworkClient.Status.CONNECTED && gateway.isDsAuthorized()); }); }
-            public void onError(String error) { Platform.runLater(() -> { if (active) feedback.setText(error); }); }
+            public void onRecovery(ClientReliability.State state) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) recovery(state); }); }
+            public void onUpdate(DsData.Update update) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway) && gateway.isDsAuthorized()) apply(update); }); }
+            public void onStatus(NetworkClient.Status value) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) status(value == NetworkClient.Status.CONNECTED && gateway.isDsAuthorized()); }); }
+            public void onError(String error) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) feedback.setText(error); }); }
         });
     }
     @FXML private void showDashboard() { sections.getSelectionModel().select(0); }
@@ -94,7 +99,33 @@ public final class DsDashboardController {
         List<Button> buttons = List.of(navDashboard, navRequests, navNotifications, navChat);
         for (int i = 0; i < buttons.size(); i++) { buttons.get(i).getStyleClass().remove("nav-current"); if (i == selected) buttons.get(i).getStyleClass().add("nav-current"); }
     }
+    private void resetView() {
+        details.clear(); refreshRequired.clear(); forwardedRequests.getItems().clear(); chatRequest.getItems().clear(); documents.getItems().clear();
+        history.getItems().clear(); conversation.getItems().clear(); notifications.getItems().clear(); statusBreakdown.getItems().clear(); recentActivity.getItems().clear();
+        decisionNote.clear(); chatText.clear(); renderedId = null;
+        forwardedCount.setText("\u2014"); notificationCount.setText("\u2014"); forwardedCaption.setText("Awaiting server data"); notificationCaption.setText("Awaiting server data");
+    }
+    private boolean bindingCurrent(long epoch, DsWorkspace source) {
+        return active && bindingEpoch == epoch && gateway == source;
+    }
+    private void recovery(ClientReliability.State state) {
+        if (state == ClientReliability.State.ONLINE && gateway.isDsAuthorized()) { status(true); return; }
+        status(false);
+        switch (state) {
+            case CONNECTING, RECONNECTING -> {
+                connectionLabel.setText(state == ClientReliability.State.CONNECTING ? "Connecting..." : "Reconnecting...");
+                connectionDot.setStyle("-fx-fill: #d59a22;");
+                feedback.setText("Connection recovery is in progress. Actions are locked; fresh server sign-in is required.");
+            }
+            case AUTHENTICATION_REQUIRED, ONLINE -> {
+                connectionLabel.setText("Connected - fresh sign-in required");
+                feedback.setText("The socket is connected. Return to sign in for fresh server authorization; previous data is not reloaded automatically.");
+            }
+            case OFFLINE -> connectionLabel.setText("Offline - return to sign in");
+        }
+    }
     private void status(boolean online) {
+        connectionDot.setStyle("");
         connectionLabel.setText(online ? "Connected" : "Disconnected - DS sign-in required");
         connectionDot.getStyleClass().removeAll("online", "offline"); connectionDot.getStyleClass().add(online ? "online" : "offline");
         workspace.setDisable(!online);
@@ -132,12 +163,13 @@ public final class DsDashboardController {
     @FXML private void returnToGn() { perform(DsData.ActionKind.RETURN_TO_GN); }
     @FXML private void sendMessage() { perform(DsData.ActionKind.CHAT); }
     private void perform(DsData.ActionKind kind) {
+        final long epoch = bindingEpoch; final DsWorkspace source = gateway;
         try {
             gateway.requireDsOfficer(); DsData.Action action = action(kind); setBusy(true);
             gateway.perform(action).whenComplete((reply, error) -> Platform.runLater(() -> {
-                if (!active) return;
+                if (!bindingCurrent(epoch, source)) return;
                 setBusy(false);
-                if (!gateway.isDsAuthorized()) { status(false); return; }
+                if (!source.isDsAuthorized()) { status(false); return; }
                 if (error != null) {
                     if (unwrap(error) instanceof TimeoutException) refreshRequired.add(action.requestId());
                     feedback.setText(errorMessage(error));
@@ -210,7 +242,7 @@ public final class DsDashboardController {
         recentActivity.getItems().setAll(entries.stream().sorted(Comparator.comparing(Activity::at).reversed()).map(Activity::text).toList());
     }
     @FXML private void signOut() {
-        active = false; workspace.setDisable(true); gateway.setListener(new DsGateway.Listener() { });
+        bindingEpoch++; active = false; workspace.setDisable(true); gateway.setListener(new DsGateway.Listener() { });
         gateway.disconnect().whenComplete((ignored, error) -> Platform.runLater(returnToLogin));
     }
     private static Throwable unwrap(Throwable error) {

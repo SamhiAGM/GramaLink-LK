@@ -34,6 +34,7 @@ class AdminGatewayTest {
         public Set<MessageType> outboundTypes(AdminData.Operation operation) { return declaredTypes; }
         public Set<MessageType> eventTypes() { return Set.of(MessageType.NOTIFICATION); }
         public Message encode(AdminData.Command command) { encoded.add(command); return message(testWireType); }
+        public boolean acceptsEvent(Message message) { return true; }
         public Optional<AdminData.Update> decodeEvent(Message message) {
             decoderThread = Thread.currentThread(); if (malformed) throw new IllegalArgumentException("Malformed fixture"); return Optional.ofNullable(next.getAndSet(null));
         }

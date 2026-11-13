@@ -16,6 +16,7 @@
 .status-text { -fx-text-fill: #44586b; -fx-font-size: 12px; }
 .online { -fx-fill: #19975b; }
 .offline { -fx-fill: #d34646; }
+.reconnecting { -fx-fill: #ce8b20; }
 .section-label { -fx-text-fill: #6a7c8c; -fx-font-size: 10px; -fx-font-weight: bold; -fx-padding: 7 0 0 0; }
 .text-field { -fx-background-color: #f8fafc; -fx-border-color: #d7e0e8; -fx-border-radius: 7; -fx-background-radius: 7; -fx-padding: 11 12; }
 .text-field:focused { -fx-border-color: #21816d; -fx-background-color: white; }

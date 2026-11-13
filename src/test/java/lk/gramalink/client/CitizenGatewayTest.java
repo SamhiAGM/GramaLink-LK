@@ -147,6 +147,7 @@ class CitizenGatewayTest {
         BlockingQueue<String> errors = new LinkedBlockingQueue<>();
         CitizenProtocol adapter = new CitizenProtocol() {
             public Optional<CitizenData.Identity> citizenAuthorization(Message reply) { return fixture().citizenAuthorization(reply); }
+            public boolean acceptsEvent(Message message) { return true; }
             public Optional<CitizenData.Update> decodeEvent(Message message) {
                 assertNotEquals(caller, Thread.currentThread());
                 if (message.type() == MessageType.NOTIFICATION) return Optional.of(new CitizenData.Notifications(List.of()));

@@ -42,6 +42,7 @@ public final class CitizenDashboardController {
     @FXML private ListView<String> timeline, messages, notifications, conversation;
     private final Map<String, CitizenData.Details> details = new HashMap<>();
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm").withZone(ZoneId.of("Asia/Colombo"));
+    private long bindingEpoch;
     private CitizenWorkspace gateway;
     private Runnable returnToLogin;
     private CitizenData.Attachment attachment;
@@ -98,6 +99,9 @@ public final class CitizenDashboardController {
 
     void attach(CitizenWorkspace gateway, Runnable returnToLogin) {
         gateway.requireCitizen();
+        if (this.gateway != null) this.gateway.setListener(new CitizenGateway.Listener() { });
+        if (this.gateway != null && this.gateway != gateway) resetView();
+        final long epoch = ++bindingEpoch;
         this.gateway = gateway;
         this.returnToLogin = returnToLogin;
         active = true;
@@ -106,16 +110,45 @@ public final class CitizenDashboardController {
         profileName.setText(identity.displayName());
         profileUserId.setText(identity.userId());
         workspace.setDisable(false);
-        status(true);
+        setBusy(false, ""); status(true);
         refreshActions();
         gateway.setListener(new CitizenGateway.Listener() {
-            public void onUpdate(CitizenData.Update update) { Platform.runLater(() -> { if (active && gateway.isCitizenAuthorized()) apply(update); }); }
-            public void onStatus(NetworkClient.Status value) { Platform.runLater(() -> { if (active) status(value == NetworkClient.Status.CONNECTED && gateway.isCitizenAuthorized()); }); }
-            public void onError(String error) { Platform.runLater(() -> { if (active) feedback.setText(error); }); }
+            public void onRecovery(ClientReliability.State state) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) recovery(state); }); }
+            public void onUpdate(CitizenData.Update update) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway) && gateway.isCitizenAuthorized()) apply(update); }); }
+            public void onStatus(NetworkClient.Status value) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) status(value == NetworkClient.Status.CONNECTED && gateway.isCitizenAuthorized()); }); }
+            public void onError(String error) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) feedback.setText(error); }); }
         });
     }
 
+    private void resetView() {
+        details.clear(); requestsTable.getItems().clear(); messageRequest.getItems().clear(); notifications.getItems().clear();
+        timeline.getItems().clear(); messages.getItems().clear(); messageText.clear(); conversationText.clear();
+        requestCount.setText("\u2014"); notificationCount.setText("\u2014");
+        requestCountCaption.setText("Awaiting server data"); notificationCountCaption.setText("Awaiting server data");
+        attachment = null; selectionVersion++; attachmentLabel.setText("No attachment selected"); documentLabel.setText("No attachment selected");
+        transferProgress.setProgress(0); documentProgress.setProgress(0); transferLabel.setText("No transfer started"); documentProgressLabel.setText("No transfer started");
+    }
+    private boolean bindingCurrent(long epoch, CitizenWorkspace source) {
+        return active && bindingEpoch == epoch && gateway == source;
+    }
+    private void recovery(ClientReliability.State state) {
+        if (state == ClientReliability.State.ONLINE && gateway.isCitizenAuthorized()) { status(true); return; }
+        status(false);
+        switch (state) {
+            case CONNECTING, RECONNECTING -> {
+                connectionLabel.setText(state == ClientReliability.State.CONNECTING ? "Connecting..." : "Reconnecting...");
+                connectionDot.setStyle("-fx-fill: #d59a22;");
+                feedback.setText("Connection recovery is in progress. Actions are locked; fresh server sign-in is required.");
+            }
+            case AUTHENTICATION_REQUIRED, ONLINE -> {
+                connectionLabel.setText("Connected - fresh sign-in required");
+                feedback.setText("The socket is connected. Return to sign in for fresh server authorization; previous data is not reloaded automatically.");
+            }
+            case OFFLINE -> connectionLabel.setText("Offline - return to sign in");
+        }
+    }
     private void status(boolean online) {
+        connectionDot.setStyle("");
         connectionLabel.setText(online ? "Connected" : "Disconnected - sign in again");
         connectionDot.getStyleClass().removeAll("online", "offline");
         connectionDot.getStyleClass().add(online ? "online" : "offline");
@@ -123,6 +156,10 @@ public final class CitizenDashboardController {
         if (!online) {
             setBusy(false, "");
             feedback.setText("The server connection was lost. Citizen actions are locked.");
+            if (attachment != null || transferProgress.getProgress() > 0) {
+                transferLabel.setText("Offline. Any unfinished transfer requires fresh authorization; progress is not durable storage confirmation.");
+                documentProgressLabel.setText(transferLabel.getText());
+            }
         }
     }
     private void refreshActions() {
@@ -197,9 +234,11 @@ public final class CitizenDashboardController {
         complete(gateway.sendMessage(selected.id(), text), "Message reply");
     }
     private void complete(CompletableFuture<Message> operation, String label) {
+        final long epoch = bindingEpoch; final CitizenWorkspace source = gateway;
         setBusy(true, "Waiting for the server…");
         operation.whenComplete((reply, error) -> Platform.runLater(() -> {
-            if (!active) return;
+            if (!bindingCurrent(epoch, source)) return;
+            if (!source.isCitizenAuthorized()) { status(false); return; }
             setBusy(false, "");
             // ACK does not add a local request, message, or successful application status.
             feedback.setText(error != null ? operationError(error)
@@ -218,10 +257,12 @@ public final class CitizenDashboardController {
     }
     void selectAttachment(Path path) {
         if (!active || !gateway.isCitizenAuthorized()) return;
+        final long epoch = bindingEpoch; final CitizenWorkspace source = gateway;
         long version = ++selectionVersion;
         setBusy(true, "Checking the selected file…");
         gateway.inspectAttachment(path).whenComplete((selected, error) -> Platform.runLater(() -> {
-            if (!active || version != selectionVersion) return;
+            if (!bindingCurrent(epoch, source) || version != selectionVersion) return;
+            if (!source.isCitizenAuthorized()) { status(false); return; }
             setBusy(false, "");
             if (error != null) feedback.setText("The selected file is not readable.");
             else {
@@ -294,7 +335,7 @@ public final class CitizenDashboardController {
         refreshActions();
     }
     @FXML private void signOut() {
-        active = false; selectionVersion++;
+        bindingEpoch++; active = false; selectionVersion++;
         workspace.setDisable(true);
         gateway.setListener(new CitizenGateway.Listener() { });
         gateway.disconnect().whenComplete((ignored, error) -> Platform.runLater(returnToLogin));

@@ -14,6 +14,8 @@ public interface CitizenProtocol {
     default boolean supports(Operation operation) { return false; }
     default Message createRequest(CitizenData.Draft draft) { throw pending(); }
     default Message chatMessage(String requestId, String text) { throw pending(); }
+    /** Fail closed: validate current-session ownership/scope and the agreed event contract before decoding. */
+    default boolean acceptsEvent(Message message) { return false; }
     default Optional<CitizenData.Update> decodeEvent(Message message) { return Optional.empty(); }
     static UnsupportedOperationException pending() {
         return new UnsupportedOperationException("This operation is waiting for the backend protocol contract.");

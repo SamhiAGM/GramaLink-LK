@@ -35,6 +35,7 @@ public final class GnDashboardController {
     @FXML private Button verifyButton, informationButton, forwardButton, rejectButton, sendButton, checkActionButton;
     private final Map<String, GnData.Details> details = new HashMap<>();
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm").withZone(ZoneId.of("Asia/Colombo"));
+    private long bindingEpoch;
     private GnWorkspace gateway;
     private Runnable returnToLogin;
     private boolean active, busy, synchronizing;
@@ -82,15 +83,19 @@ public final class GnDashboardController {
 
     void attach(GnWorkspace gateway, Runnable returnToLogin) {
         gateway.requireGnOfficer();
+        if (this.gateway != null) this.gateway.setListener(new GnGateway.Listener() { });
+        if (this.gateway != null && this.gateway != gateway) resetView();
+        final long epoch = ++bindingEpoch;
         this.gateway = gateway; this.returnToLogin = returnToLogin; active = true;
         officerName.setText(gateway.identity().orElseThrow().displayName());
-        status(true); refreshActions();
+        setBusy(false); status(true); refreshActions();
         gateway.setListener(new GnGateway.Listener() {
-            public void onUpdate(GnData.Update update) { Platform.runLater(() -> { if (active && gateway.isGnAuthorized()) apply(update); }); }
+            public void onRecovery(ClientReliability.State state) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) recovery(state); }); }
+            public void onUpdate(GnData.Update update) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway) && gateway.isGnAuthorized()) apply(update); }); }
             public void onStatus(NetworkClient.Status value) { Platform.runLater(() -> {
-                if (active) status(value == NetworkClient.Status.CONNECTED && gateway.isGnAuthorized());
+                if (bindingCurrent(epoch, gateway)) status(value == NetworkClient.Status.CONNECTED && gateway.isGnAuthorized());
             }); }
-            public void onError(String error) { Platform.runLater(() -> { if (active) feedback.setText(error); }); }
+            public void onError(String error) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) feedback.setText(error); }); }
         });
     }
     @FXML private void showDashboard() { sections.getSelectionModel().select(0); }
@@ -104,7 +109,34 @@ public final class GnDashboardController {
             if (selected == i) navigation.get(i).getStyleClass().add("nav-current");
         }
     }
+    private void resetView() {
+        details.clear(); assignedRequests.getItems().clear(); messageRequest.getItems().clear(); documents.getItems().clear();
+        history.getItems().clear(); conversation.getItems().clear(); notifications.getItems().clear(); statusBreakdown.getItems().clear();
+        actionNote.clear(); chatText.clear(); renderedRequestId = null;
+        assignedCount.setText("\u2014"); notificationCount.setText("\u2014");
+        assignedCaption.setText("Awaiting server data"); notificationCaption.setText("Awaiting server data");
+    }
+    private boolean bindingCurrent(long epoch, GnWorkspace source) {
+        return active && bindingEpoch == epoch && gateway == source;
+    }
+    private void recovery(ClientReliability.State state) {
+        if (state == ClientReliability.State.ONLINE && gateway.isGnAuthorized()) { status(true); return; }
+        status(false);
+        switch (state) {
+            case CONNECTING, RECONNECTING -> {
+                connectionLabel.setText(state == ClientReliability.State.CONNECTING ? "Connecting..." : "Reconnecting...");
+                connectionDot.setStyle("-fx-fill: #d59a22;");
+                feedback.setText("Connection recovery is in progress. Actions are locked; fresh server sign-in is required.");
+            }
+            case AUTHENTICATION_REQUIRED, ONLINE -> {
+                connectionLabel.setText("Connected - fresh sign-in required");
+                feedback.setText("The socket is connected. Return to sign in for fresh server authorization; previous data is not reloaded automatically.");
+            }
+            case OFFLINE -> connectionLabel.setText("Offline - return to sign in");
+        }
+    }
     private void status(boolean online) {
+        connectionDot.setStyle("");
         connectionLabel.setText(online ? "Connected" : "Disconnected - GN sign-in required");
         connectionDot.getStyleClass().removeAll("online", "offline");
         connectionDot.getStyleClass().add(online ? "online" : "offline");
@@ -140,14 +172,15 @@ public final class GnDashboardController {
     @FXML private void rejectRequest() { perform(GnData.ActionKind.REJECT_REQUEST); }
     @FXML private void sendMessage() { perform(GnData.ActionKind.CHAT); }
     private void perform(GnData.ActionKind kind) {
+        final long epoch = bindingEpoch; final GnWorkspace source = gateway;
         try {
             gateway.requireGnOfficer();
             GnData.Action request = action(kind);
             setBusy(true);
             gateway.perform(request).whenComplete((reply, error) -> Platform.runLater(() -> {
-                if (!active) return;
+                if (!bindingCurrent(epoch, source)) return;
                 setBusy(false);
-                if (!gateway.isGnAuthorized()) { status(false); return; }
+                if (!source.isGnAuthorized()) { status(false); return; }
                 // Never mutate status, documents, history or chat based on a write/ACK alone.
                 feedback.setText(error != null ? errorMessage(error) : reply.type() == MessageType.ERROR
                         ? LoginService.describe(reply) : "Server reply: " + reply.type() + ". Awaiting authoritative request data; no local status change applied.");
@@ -203,7 +236,7 @@ public final class GnDashboardController {
         refreshActions();
     }
     @FXML private void signOut() {
-        active = false; workspace.setDisable(true); gateway.setListener(new GnGateway.Listener() { });
+        bindingEpoch++; active = false; workspace.setDisable(true); gateway.setListener(new GnGateway.Listener() { });
         gateway.disconnect().whenComplete((ignored, error) -> Platform.runLater(returnToLogin));
     }
     static String errorMessage(Throwable error) {

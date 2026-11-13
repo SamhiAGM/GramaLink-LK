@@ -44,6 +44,7 @@ public final class AdminDashboardController {
     @FXML private Button createUserButton, updateUserButton, disableUserButton, checkUserButton;
     @FXML private Button createOfficeButton, updateOfficeButton, archiveOfficeButton, checkOfficeButton;
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm").withZone(ZoneId.of("Asia/Colombo"));
+    private long bindingEpoch;
     private AdminWorkspace gateway;
     private Runnable returnToLogin;
     private boolean active, busy, synchronizing;
@@ -74,12 +75,16 @@ public final class AdminDashboardController {
         workspace.setDisable(true);
     }
     void attach(AdminWorkspace gateway, Runnable returnToLogin) {
-        gateway.requireAdministrator(); this.gateway = gateway; this.returnToLogin = returnToLogin; active = true;
-        administratorName.setText(gateway.identity().orElseThrow().displayName()); status(true); refreshActions();
+        gateway.requireAdministrator();
+        if (this.gateway != null) this.gateway.setListener(new AdminGateway.Listener() { });
+        if (this.gateway != null && this.gateway != gateway) resetView();
+        final long epoch = ++bindingEpoch; this.gateway = gateway; this.returnToLogin = returnToLogin; active = true;
+        administratorName.setText(gateway.identity().orElseThrow().displayName()); setBusy(false); status(true); refreshActions();
         gateway.setListener(new AdminGateway.Listener() {
-            public void onUpdate(AdminData.Update update) { Platform.runLater(() -> { if (active && gateway.isAdministratorAuthorized()) apply(update); }); }
-            public void onStatus(NetworkClient.Status value) { Platform.runLater(() -> { if (active) status(value == NetworkClient.Status.CONNECTED && gateway.isAdministratorAuthorized()); }); }
-            public void onError(String error) { Platform.runLater(() -> { if (active) feedback(error, true); }); }
+            public void onRecovery(ClientReliability.State state) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) recovery(state); }); }
+            public void onUpdate(AdminData.Update update) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway) && gateway.isAdministratorAuthorized()) apply(update); }); }
+            public void onStatus(NetworkClient.Status value) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) status(value == NetworkClient.Status.CONNECTED && gateway.isAdministratorAuthorized()); }); }
+            public void onError(String error) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) feedback(error, true); }); }
         });
     }
     @FXML private void showOverview() { sections.getSelectionModel().select(0); }
@@ -92,7 +97,33 @@ public final class AdminDashboardController {
         List<Button> buttons = List.of(navOverview, navClients, navUsers, navOffices, navStatistics, navAudit);
         for (int i = 0; i < buttons.size(); i++) { buttons.get(i).getStyleClass().remove("nav-current"); if (selected == i) buttons.get(i).getStyleClass().add("nav-current"); }
     }
+    private void resetView() {
+        clientsTable.getItems().clear(); usersTable.getItems().clear(); officesTable.getItems().clear(); statisticsTable.getItems().clear(); auditTable.getItems().clear();
+        userRole.getItems().clear(); userOffice.getItems().clear(); officeKind.getItems().clear(); fillUser(null); fillOffice(null);
+        clientsCount.setText("\u2014"); usersCount.setText("\u2014"); officesCount.setText("\u2014"); requestsCount.setText("\u2014");
+        overviewAsOf.setText("Server overview has not been loaded."); statisticsTotal.setText("Backend total: \u2014"); statisticsScope.setText("Scope: Not supplied"); statisticsAsOf.setText("Statistics have not been loaded.");
+    }
+    private boolean bindingCurrent(long epoch, AdminWorkspace source) {
+        return active && bindingEpoch == epoch && gateway == source;
+    }
+    private void recovery(ClientReliability.State state) {
+        if (state == ClientReliability.State.ONLINE && gateway.isAdministratorAuthorized()) { status(true); return; }
+        status(false);
+        switch (state) {
+            case CONNECTING, RECONNECTING -> {
+                connectionLabel.setText(state == ClientReliability.State.CONNECTING ? "Connecting..." : "Reconnecting...");
+                connectionDot.setStyle("-fx-fill: #d59a22;");
+                feedback.setText("Connection recovery is in progress. Actions are locked; fresh server sign-in is required.");
+            }
+            case AUTHENTICATION_REQUIRED, ONLINE -> {
+                connectionLabel.setText("Connected - fresh sign-in required");
+                feedback.setText("The socket is connected. Return to sign in for fresh server authorization; previous data is not reloaded automatically.");
+            }
+            case OFFLINE -> connectionLabel.setText("Offline - return to sign in");
+        }
+    }
     private void status(boolean online) {
+        connectionDot.setStyle("");
         connectionLabel.setText(online ? "Connected" : "Disconnected - Administrator sign-in required");
         connectionDot.getStyleClass().removeAll("online", "offline"); connectionDot.getStyleClass().add(online ? "online" : "offline");
         workspace.setDisable(!online);
@@ -148,11 +179,12 @@ public final class AdminDashboardController {
         catch (IllegalArgumentException | SecurityException error) { feedback(error.getMessage(), true); }
     }
     private void perform(AdminData.Command command) {
+        final long epoch = bindingEpoch; final AdminWorkspace source = gateway;
         setBusy(true);
         gateway.perform(command).whenComplete((reply, error) -> Platform.runLater(() -> {
-            if (!active) return;
+            if (!bindingCurrent(epoch, source)) return;
             setBusy(false);
-            if (!gateway.isAdministratorAuthorized()) { status(false); return; }
+            if (!source.isAdministratorAuthorized()) { status(false); return; }
             if (error != null) feedback(errorMessage(error), true);
             else if (reply.type() == MessageType.ERROR) feedback(LoginService.describe(reply) + " No local administrative change was applied.", true);
             else feedback("Server reply: " + reply.type() + ". Awaiting authoritative administrative data; no local change or audit entry was generated.", false);
@@ -207,7 +239,7 @@ public final class AdminDashboardController {
         feedback.setText(text); feedback.getStyleClass().remove("error-notice"); if (error) feedback.getStyleClass().add("error-notice");
     }
     @FXML private void signOut() {
-        active = false; workspace.setDisable(true); gateway.setListener(new AdminGateway.Listener() { });
+        bindingEpoch++; active = false; workspace.setDisable(true); gateway.setListener(new AdminGateway.Listener() { });
         gateway.disconnect().whenComplete((ignored, error) -> Platform.runLater(returnToLogin));
     }
     static String errorMessage(Throwable error) {
