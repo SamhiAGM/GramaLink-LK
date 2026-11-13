@@ -65,10 +65,10 @@ public final class SessionManager {
     }
 
     /**
-     * Integration point for Shadhir's future AuthService: once the backend has
+     * Integration point for Shadhir's AuthService: once the backend has
      * authenticated credentials and validated the role, pass its canonical user
-     * ID/role here with the handler's live socket. No network message calls this
-     * method in Phase 1; LOGIN remains NOT_IMPLEMENTED.
+     * ID/role here with the handler's live socket. BackendDispatcher calls this
+     * after credential verification; network-only fixtures do not implement LOGIN.
      *
      * The same identity/socket registration is idempotent. Changing identities on
      * an already registered connection is rejected. Close a disconnected socket

@@ -1,5 +1,9 @@
 # GramaLink LK file transport v1 (N07 Phase 1)
 
+This document records the original transport-only boundary. The integrated backend now
+implements authorization/storage and adds durable STORED completion and download startup;
+see [the backend contract](backend-contract.md). Binary framing below is unchanged.
+
 This specification is the NetworkClient integration contract for Ahamad and the
 FileTransferService integration boundary for Shadhir. All multibyte integers use
 **big-endian/network byte order**. Read exact byte counts; a TCP read is not a frame.

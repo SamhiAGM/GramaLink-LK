@@ -23,6 +23,14 @@ public final class NetworkServer implements Closeable {
     private final Set<Socket> connections = ConcurrentHashMap.newKeySet();
     private final Object lifecycleLock = new Object();
     private volatile boolean stopping;
+    private MessageDispatcher dispatcher;
+
+    /** Integrated backend constructor; legacy constructors preserve the network-only fixtures. */
+    public NetworkServer(int port, SessionManager sessions, Duration timeout, Duration interval,
+                         FileTransferService files, MessageDispatcher dispatcher) throws IOException {
+        this(port, sessions, timeout, interval, files);
+        this.dispatcher = Objects.requireNonNull(dispatcher);
+    }
 
     public NetworkServer(int port) throws IOException {
         this(port, new SessionManager());
@@ -93,7 +101,7 @@ public final class NetworkServer implements Closeable {
                     connections.add(client);
                     try {
                         workers.execute(new ClientHandler(client, sessionManager, fileTransferService,
-                                () -> connections.remove(client)));
+                                () -> connections.remove(client), dispatcher));
                     } catch (RejectedExecutionException exception) {
                         connections.remove(client);
                         closeClient(client);

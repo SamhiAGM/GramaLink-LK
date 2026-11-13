@@ -36,15 +36,23 @@ public final class ServerMain {
 
         final NetworkServer server;
         try {
-            server = new NetworkServer(port, new SessionManager(), heartbeatTimeout, heartbeatCheckInterval);
+            var sessions = new SessionManager();
+            var database = lk.gramalink.server.repository.Database.fromEnvironment();
+            database.transaction(c -> { lk.gramalink.server.repository.Sql.rows(c, "SELECT id FROM users LIMIT 1"); return null; });
+            var files = new lk.gramalink.server.service.FileTransferService(database, sessions,
+                    java.nio.file.Path.of(System.getenv().getOrDefault("GRAMALINK_STORAGE", "storage")),
+                    Long.parseLong(System.getenv().getOrDefault("GRAMALINK_MAX_FILE_BYTES", "10485760")),
+                    java.util.Set.of(System.getenv().getOrDefault("GRAMALINK_ALLOWED_MEDIA_TYPES", "application/pdf").split(",")));
+            server = new NetworkServer(port, sessions, heartbeatTimeout, heartbeatCheckInterval, files,
+                    new lk.gramalink.server.backend.BackendDispatcher(database, sessions, files));
         } catch (BindException exception) {
             System.err.println("Unable to start GramaLink Server on port " + port
                     + ": port is already in use or unavailable. " + exception.getMessage());
             System.exit(1);
             return;
-        } catch (IOException exception) {
+        } catch (IOException | RuntimeException exception) {
             System.err.println("Unable to start GramaLink Server on port " + port
-                    + ": " + exception.getMessage());
+                    + ": backend configuration, database, or storage is unavailable.");
             System.exit(1);
             return;
         }

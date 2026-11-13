@@ -164,6 +164,12 @@ public final class FileTransferTransport implements AutoCloseable {
         }
     }
 
+    /** Release a download whose backend stream failed before the first chunk was written. */
+    public synchronized void cancel(UUID transferId) {
+        Transfer transfer = transfers.get(transferId);
+        if (transfer != null) discard(transfer);
+    }
+
     private void abort(Transfer transfer) {
         try {
             service.abort(transfer.session(), transfer.grant());

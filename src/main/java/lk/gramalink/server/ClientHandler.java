@@ -14,12 +14,13 @@ import java.io.IOException;
 import java.net.Socket;
 import java.util.Objects;
 
-/** Owns one mixed-frame connection; backend operations remain unavailable by default. */
+/** Owns one mixed-frame connection; application handlers inject the backend command dispatcher. */
 public final class ClientHandler implements Runnable {
     private final Socket clientSocket;
     private final SessionManager sessionManager;
     private final FileTransferService fileTransferService;
     private final Runnable onDisconnect;
+    private final MessageDispatcher dispatcher;
 
     public ClientHandler(Socket clientSocket) {
         this(clientSocket, new SessionManager());
@@ -33,6 +34,10 @@ public final class ClientHandler implements Runnable {
         this(clientSocket, sessionManager, fileTransferService, () -> { });
     }
 
+    public ClientHandler(Socket socket, SessionManager sessions, FileTransferService files, MessageDispatcher dispatcher) {
+        this(socket, sessions, files, () -> { }, dispatcher);
+    }
+
     ClientHandler(Socket clientSocket, Runnable onDisconnect) {
         this(clientSocket, new SessionManager(), onDisconnect);
     }
@@ -43,10 +48,16 @@ public final class ClientHandler implements Runnable {
 
     ClientHandler(Socket clientSocket, SessionManager sessionManager, FileTransferService fileTransferService,
                   Runnable onDisconnect) {
+        this(clientSocket, sessionManager, fileTransferService, onDisconnect, null);
+    }
+
+    ClientHandler(Socket clientSocket, SessionManager sessionManager, FileTransferService fileTransferService,
+                  Runnable onDisconnect, MessageDispatcher dispatcher) {
         this.clientSocket = Objects.requireNonNull(clientSocket, "Client socket is required.");
         this.sessionManager = Objects.requireNonNull(sessionManager, "Session manager is required.");
         this.fileTransferService = Objects.requireNonNull(fileTransferService, "File service is required.");
         this.onDisconnect = Objects.requireNonNull(onDisconnect, "Disconnect callback is required.");
+        this.dispatcher = dispatcher;
     }
 
     @Override
@@ -71,6 +82,8 @@ public final class ClientHandler implements Runnable {
                     } else if (message.type() == MessageType.HEARTBEAT && sessionManager.recordHeartbeat(clientSocket)) {
                         var payload = JsonNodeFactory.instance.objectNode().put("acknowledgedType", "HEARTBEAT");
                         response = new Message(MessageType.ACK, message.correlationId(), null, payload);
+                    } else if (dispatcher != null) {
+                        response = dispatcher.handle(clientSocket, message);
                     } else {
                         var payload = JsonNodeFactory.instance.objectNode()
                                 .put("code", "NOT_IMPLEMENTED")
@@ -87,6 +100,34 @@ public final class ClientHandler implements Runnable {
                     response = new Message(response.type(), response.payload());
                 }
                 writer.send(response);
+                if (frame instanceof FileChunk chunk && chunk.last() && response.type() == MessageType.ACK) {
+                    var session = sessionManager.findSession(clientSocket).orElse(null);
+                    if (session != null) {
+                        var complete = fileTransferService.completion(session, chunk.transferId());
+                        if (complete.isPresent()) writer.send(complete.get());
+                    }
+                }
+                if (response.type() == MessageType.FILE_META && response.payload().path("status").asText().equals("READY")
+                        && response.payload().path("direction").asText().equals("DOWNLOAD")) {
+                    var session = sessionManager.findSession(clientSocket).orElse(null);
+                    var grant = new FileTransferService.Grant(java.util.UUID.fromString(response.payload().path("transferId").asText()),
+                            FileTransferService.Direction.DOWNLOAD, response.payload().path("totalBytes").asLong());
+                    Thread.startVirtualThread(() -> {
+                        try (var download = fileTransferService.download(session, grant)) {
+                            long sequence = 0, remaining = grant.totalBytes();
+                            do {
+                                byte[] data = download.readNBytes((int)Math.min(65536, remaining));
+                                if (data.length == 0 && remaining > 0) throw new IOException("Incomplete stored file.");
+                                remaining -= data.length;
+                                transfers.sendChunk(new FileChunk(grant.transferId(), sequence++, remaining == 0, data));
+                            } while (remaining > 0);
+                        } catch (IOException | RuntimeException e) {
+                            transfers.cancel(grant.transferId());
+                            try { writer.send(new Message(MessageType.ERROR, responseForDownload(grant))); }
+                            catch (IOException ignored) { }
+                        }
+                    });
+                }
             }
         } catch (EOFException exception) {
             if (!clientSocket.isClosed()) {
@@ -111,5 +152,10 @@ public final class ClientHandler implements Runnable {
                 System.out.println("Client disconnected: " + address);
             }
         }
+    }
+
+    private static com.fasterxml.jackson.databind.node.ObjectNode responseForDownload(FileTransferService.Grant grant) {
+        return JsonNodeFactory.instance.objectNode().put("code", "FILE_TRANSFER_FAILED")
+                .put("message", "Download could not be completed.").put("transferId", grant.transferId().toString());
     }
 }
