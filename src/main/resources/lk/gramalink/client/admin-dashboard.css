@@ -1,0 +1,4 @@
+/* Shared base theme remains citizen-dashboard.css. */
+.danger-button { -fx-background-color: #f9e4e4; -fx-text-fill: #a53131; }
+.danger-button:hover { -fx-background-color: #f1cccc; }
+.error-notice { -fx-background-color: #fff0ec; -fx-text-fill: #963b2d; }

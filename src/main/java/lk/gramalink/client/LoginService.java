@@ -41,6 +41,8 @@ public final class LoginService implements AutoCloseable {
     private final GnProtocol gnProtocol;
     private volatile DsGateway ds;
     private final DsProtocol dsProtocol;
+    private volatile AdminGateway administrator;
+    private final AdminProtocol adminProtocol;
     private volatile boolean closed;
 
     public LoginService(Consumer<NetworkClient.Status> status, Executor callbacks) {
@@ -56,11 +58,16 @@ public final class LoginService implements AutoCloseable {
     }
 
     LoginService(Consumer<NetworkClient.Status> status, Executor callbacks, CitizenProtocol citizenProtocol, GnProtocol gnProtocol, DsProtocol dsProtocol) {
+        this(status, callbacks, citizenProtocol, gnProtocol, dsProtocol, AdminProtocol.pendingBackend());
+    }
+
+    LoginService(Consumer<NetworkClient.Status> status, Executor callbacks, CitizenProtocol citizenProtocol, GnProtocol gnProtocol, DsProtocol dsProtocol, AdminProtocol adminProtocol) {
         this.status = Objects.requireNonNull(status);
         this.callbacks = Objects.requireNonNull(callbacks);
         this.citizenProtocol = Objects.requireNonNull(citizenProtocol);
         this.gnProtocol = Objects.requireNonNull(gnProtocol);
         this.dsProtocol = Objects.requireNonNull(dsProtocol);
+        this.adminProtocol = Objects.requireNonNull(adminProtocol);
     }
 
     public CompletableFuture<Message> login(Input input) {
@@ -71,20 +78,24 @@ public final class LoginService implements AutoCloseable {
             if (citizen != null) citizen.close();
             if (gn != null) gn.close();
             if (ds != null) ds.close();
+            if (administrator != null) administrator.close();
             if (client != null) client.close();
             AtomicReference<CitizenGateway> binding = new AtomicReference<>();
             AtomicReference<GnGateway> gnBinding = new AtomicReference<>();
             AtomicReference<DsGateway> dsBinding = new AtomicReference<>();
+            AtomicReference<AdminGateway> adminBinding = new AtomicReference<>();
             client = new NetworkClient(input.host(), input.port(), new NetworkClient.Listener() {
                 public void onStatus(NetworkClient.Status value) {
                     CitizenGateway gateway = binding.get();
                     gateway.connectionStatus(value);
                     gnBinding.get().connectionStatus(value);
                     dsBinding.get().connectionStatus(value);
+                    adminBinding.get().connectionStatus(value);
                     callbacks.execute(() -> { if (citizen == gateway && !closed) status.accept(value); });
                 }
                 public void onMessage(Message message) {
                     binding.get().incoming(message); gnBinding.get().incoming(message); dsBinding.get().incoming(message);
+                    adminBinding.get().incoming(message);
                 }
             }, Runnable::run);
             CitizenGateway gateway = new CitizenGateway(client, citizenProtocol, callbacks);
@@ -95,6 +106,8 @@ public final class LoginService implements AutoCloseable {
             gn = officerGateway;
             DsGateway dsGateway = new DsGateway(client, dsProtocol, callbacks);
             dsBinding.set(dsGateway); ds = dsGateway;
+            AdminGateway adminGateway = new AdminGateway(client, adminProtocol, callbacks);
+            adminBinding.set(adminGateway); administrator = adminGateway;
             try {
                 client.connect();
                 if (closed) { client.close(); throw new IOException("Login service is closed."); }
@@ -106,6 +119,7 @@ public final class LoginService implements AutoCloseable {
                             gateway.acceptLoginReply(reply);
                             officerGateway.acceptLoginReply(reply);
                             dsGateway.acceptLoginReply(reply);
+                            adminGateway.acceptLoginReply(reply);
                             return reply;
                         });
             } catch (IOException error) { throw new CompletionException(error); }
@@ -135,13 +149,19 @@ public final class LoginService implements AutoCloseable {
         return gateway != null && gateway.isDsAuthorized() ? Optional.of(gateway) : Optional.empty();
     }
 
+    /** Empty until the matched server reply is validated by the agreed Administrator contract. */
+    public Optional<AdminGateway> adminGateway() {
+        AdminGateway gateway = administrator;
+        return gateway != null && gateway.isAdministratorAuthorized() ? Optional.of(gateway) : Optional.empty();
+    }
+
     public static String describe(Message reply) {
         if (reply.type() == MessageType.ERROR) {
             String code = reply.payload().path("code").asText("SERVER_ERROR");
             String detail = reply.payload().path("message").asText("The server rejected this request.");
             return code + ": " + detail;
         }
-        // U01 deliberately has no authorized navigation, even if a different server sends LOGIN_OK.
+        // A LOGIN_OK envelope alone is insufficient; guarded role adapters decide navigation.
         return "Server response: " + reply.type() + ". Dashboard access is not available in this client yet.";
     }
 
@@ -152,6 +172,7 @@ public final class LoginService implements AutoCloseable {
             if (citizen != null) citizen.close();
             if (gn != null) gn.close();
             if (ds != null) ds.close();
+            if (administrator != null) administrator.close();
             if (client != null) client.close();
         });
         worker.shutdown();

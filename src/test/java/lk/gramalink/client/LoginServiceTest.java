@@ -67,6 +67,7 @@ class LoginServiceTest {
                 assertEquals("NOT_IMPLEMENTED", reply.payload().path("code").asText());
                 assertTrue(service.gnGateway().isEmpty());
                 assertTrue(service.dsGateway().isEmpty());
+                assertTrue(service.adminGateway().isEmpty());
                 assertEquals("NOT_IMPLEMENTED: Operation LOGIN is not implemented.", LoginService.describe(reply));
             } finally {
                 service.disconnect().get(3, TimeUnit.SECONDS);
@@ -139,6 +140,19 @@ class LoginServiceTest {
                         JsonNodeFactory.instance.objectNode().put("role", "DS_OFFICER").put("userId", "claimed-ds")));
                 pending.get(3, TimeUnit.SECONDS);
                 assertTrue(service.dsGateway().isEmpty()); assertTrue(service.gnGateway().isEmpty()); assertTrue(service.citizenGateway().isEmpty());
+            }
+        }
+    }
+
+    @Test void defaultLoginServiceDoesNotTrustAdministratorRoleClaims() throws Exception {
+        try (ServerSocket listener = new ServerSocket(0); LoginService service = new LoginService(status -> { }, Runnable::run)) {
+            listener.setSoTimeout(3000); var pending = service.login(new LoginService.Input("127.0.0.1", listener.getLocalPort(), "administrator", "test-only"));
+            try (Socket peer = listener.accept()) {
+                peer.setSoTimeout(3000); Message login = JsonUtil.readMessage(new DataInputStream(peer.getInputStream()));
+                JsonUtil.writeMessage(new DataOutputStream(peer.getOutputStream()), new Message(MessageType.LOGIN_OK, login.correlationId(), "unverified",
+                        JsonNodeFactory.instance.objectNode().put("role", "ADMINISTRATOR").put("userId", "claimed-admin")));
+                pending.get(3, TimeUnit.SECONDS);
+                assertTrue(service.adminGateway().isEmpty()); assertTrue(service.citizenGateway().isEmpty()); assertTrue(service.gnGateway().isEmpty()); assertTrue(service.dsGateway().isEmpty());
             }
         }
     }
