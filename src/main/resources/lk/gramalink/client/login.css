@@ -1,0 +1,27 @@
+.app-root { -fx-font-family: "Segoe UI", sans-serif; -fx-font-size: 13px; -fx-background-color: #f5f7fb; }
+.label { -fx-text-fill: #243c51; }
+.brand-panel { -fx-background-color: linear-gradient(to bottom right, #102d46, #174d61); -fx-padding: 42 30 36 30; }
+.brand-mark { -fx-background-color: #c6eee2; -fx-text-fill: #133b47; -fx-font-size: 23px; -fx-font-weight: bold; -fx-padding: 12; -fx-background-radius: 14; }
+.brand-title { -fx-text-fill: white; -fx-font-size: 28px; -fx-font-weight: bold; }
+.brand-tagline { -fx-text-fill: #e4f3f6; -fx-font-size: 24px; }
+.brand-description { -fx-text-fill: #c0d6e0; -fx-line-spacing: 5; }
+.brand-panel .eyebrow { -fx-text-fill: #9ddbc9; }
+.brand-panel .separator .line { -fx-border-color: #487084; }
+.login-panel { -fx-padding: 32 42; -fx-background-color: #ffffff; }
+.heading { -fx-font-size: 28px; -fx-font-weight: bold; -fx-text-fill: #172e44; }
+.eyebrow { -fx-font-size: 11px; -fx-font-weight: bold; }
+.accent { -fx-text-fill: #19745f; }
+.muted { -fx-text-fill: #617386; }
+.connection-badge { -fx-padding: 9 12; -fx-background-color: #f1f5f8; -fx-background-radius: 8; }
+.status-text { -fx-text-fill: #44586b; -fx-font-size: 12px; }
+.online { -fx-fill: #19975b; }
+.offline { -fx-fill: #d34646; }
+.section-label { -fx-text-fill: #6a7c8c; -fx-font-size: 10px; -fx-font-weight: bold; -fx-padding: 7 0 0 0; }
+.text-field { -fx-background-color: #f8fafc; -fx-border-color: #d7e0e8; -fx-border-radius: 7; -fx-background-radius: 7; -fx-padding: 11 12; }
+.text-field:focused { -fx-border-color: #21816d; -fx-background-color: white; }
+.button { -fx-padding: 12 16; -fx-background-radius: 7; -fx-cursor: hand; -fx-font-weight: bold; }
+.primary-button { -fx-background-color: #19745f; -fx-text-fill: white; }
+.primary-button:hover { -fx-background-color: #125b4a; }
+.secondary-button { -fx-background-color: #edf2f6; -fx-text-fill: #34516a; }
+.secondary-button:hover { -fx-background-color: #dfe8ef; }
+.feedback { -fx-text-fill: #536779; -fx-font-size: 12px; -fx-line-spacing: 3; }
