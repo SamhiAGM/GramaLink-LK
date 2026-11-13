@@ -1,0 +1,152 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+<?import javafx.scene.shape.Circle?>
+<BorderPane xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1"
+            fx:controller="lk.gramalink.client.DsDashboardController" styleClass="citizen-root">
+    <left>
+        <VBox spacing="12" prefWidth="215" minWidth="190" styleClass="sidebar">
+            <Label text="GL" styleClass="brand-mark"/>
+            <Label text="GramaLink LK" styleClass="brand-name"/>
+            <Label text="DS OFFICER WORKSPACE" styleClass="sidebar-caption"/>
+            <Separator/>
+            <Button fx:id="navDashboard" text="Dashboard" onAction="#showDashboard" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button fx:id="navRequests" text="Forwarded Requests" onAction="#showRequests" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button fx:id="navNotifications" text="Notifications" onAction="#showNotifications" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button fx:id="navChat" text="Officer Chat" onAction="#showChat" maxWidth="Infinity" styleClass="nav-button"/>
+            <Region VBox.vgrow="ALWAYS"/>
+            <Label text="Review the evidence.&#10;Make informed decisions." styleClass="sidebar-caption" wrapText="true"/>
+            <Button text="Back to sign in" onAction="#signOut" maxWidth="Infinity" styleClass="nav-button"/>
+        </VBox>
+    </left>
+    <center>
+        <VBox spacing="16" styleClass="main-area">
+            <HBox spacing="12" alignment="CENTER_LEFT">
+                <VBox spacing="5" HBox.hgrow="ALWAYS">
+                    <Label text="DIVISIONAL SECRETARIAT · REVIEW DESK" styleClass="eyebrow"/>
+                    <Label text="DS Officer dashboard" styleClass="page-title"/>
+                    <Label fx:id="officerName" text="DS Officer authorization required" styleClass="muted"/>
+                </VBox>
+                <Circle fx:id="connectionDot" radius="5" styleClass="offline"/>
+                <Label fx:id="connectionLabel" text="Not connected"/>
+            </HBox>
+            <Label fx:id="feedback" text="DS decisions require an available server service. Status and version remain unchanged until authoritative updates arrive."
+                   wrapText="true" maxWidth="Infinity" styleClass="notice"/>
+            <HBox fx:id="activityRow" spacing="10" alignment="CENTER_LEFT">
+                <ProgressIndicator fx:id="busyIndicator" visible="false" prefWidth="20" prefHeight="20"/>
+                <Label fx:id="activityLabel" styleClass="muted"/>
+            </HBox>
+            <VBox fx:id="workspace" VBox.vgrow="ALWAYS">
+                <TabPane fx:id="sections" tabClosingPolicy="UNAVAILABLE" VBox.vgrow="ALWAYS">
+                    <tabs>
+                        <Tab text="Dashboard">
+                            <ScrollPane fitToWidth="true">
+                                <VBox spacing="20" styleClass="section">
+                                    <Label text="Your DS review desk" styleClass="section-title"/>
+                                    <Label text="Review forwarded requests and supporting evidence before making a decision." wrapText="true" styleClass="muted"/>
+                                    <HBox spacing="16">
+                                        <VBox spacing="10" styleClass="metric-card" HBox.hgrow="ALWAYS">
+                                            <Label text="FORWARDED REQUESTS" styleClass="eyebrow"/>
+                                            <Label fx:id="forwardedCount" text="—" styleClass="metric"/>
+                                            <Label fx:id="forwardedCaption" text="Awaiting server data" styleClass="muted" wrapText="true"/>
+                                        </VBox>
+                                        <VBox spacing="10" styleClass="metric-card" HBox.hgrow="ALWAYS">
+                                            <Label text="DS NOTIFICATIONS" styleClass="eyebrow"/>
+                                            <Label fx:id="notificationCount" text="—" styleClass="metric"/>
+                                            <Label fx:id="notificationCaption" text="Awaiting server data" styleClass="muted" wrapText="true"/>
+                                        </VBox>
+                                    </HBox>
+                                    <Button text="Review forwarded requests" onAction="#showRequests" styleClass="primary-button"/>
+                                    <HBox spacing="16">
+                                        <VBox spacing="10" HBox.hgrow="ALWAYS">
+                                            <Label text="Forwarded requests by status" styleClass="subheading"/>
+                                            <ListView fx:id="statusBreakdown" prefHeight="260"/>
+                                        </VBox>
+                                        <VBox spacing="10" HBox.hgrow="ALWAYS">
+                                            <Label text="Recent activity" styleClass="subheading"/>
+                                            <ListView fx:id="recentActivity" prefHeight="260"/>
+                                        </VBox>
+                                    </HBox>
+                                </VBox>
+                            </ScrollPane>
+                        </Tab>
+                        <Tab text="Forwarded Requests">
+                            <ScrollPane fx:id="requestsScroll" fitToWidth="true">
+                                <VBox spacing="16" styleClass="section">
+                                    <Label text="Forwarded requests" styleClass="section-title"/>
+                                    <Label text="Review only requests authorized for your DS office. Dates and versions are shown when supplied by the server." wrapText="true" styleClass="muted"/>
+                                    <TableView fx:id="forwardedRequests" prefHeight="210" minHeight="170">
+                                        <columns>
+                                            <TableColumn fx:id="idColumn" text="Request ID" prefWidth="135"/>
+                                            <TableColumn fx:id="citizenColumn" text="Citizen" prefWidth="140"/>
+                                            <TableColumn fx:id="officeColumn" text="GN office" prefWidth="140"/>
+                                            <TableColumn fx:id="typeColumn" text="Request type" prefWidth="140"/>
+                                            <TableColumn fx:id="statusColumn" text="Status" prefWidth="140"/>
+                                            <TableColumn fx:id="dateColumn" text="Submitted (Sri Lanka)" prefWidth="175"/>
+                                            <TableColumn fx:id="versionColumn" text="Server version" prefWidth="125"/>
+                                        </columns>
+                                    </TableView>
+                                    <Label fx:id="detailsHeading" text="Select a forwarded request" styleClass="subheading"/>
+                                    <Label fx:id="originatingGn" text="Originating GN officer: Not loaded" wrapText="true"/>
+                                    <Label fx:id="versionLabel" text="Current server version: Not supplied" styleClass="version-label" wrapText="true"/>
+                                    <Label fx:id="detailsDescription" text="Details matching the current request version have not been loaded." wrapText="true"/>
+                                    <HBox spacing="16">
+                                        <VBox spacing="10" HBox.hgrow="ALWAYS">
+                                            <Label text="Supporting documents" styleClass="subheading"/>
+                                            <TableView fx:id="documents" prefHeight="180">
+                                                <columns>
+                                                    <TableColumn fx:id="documentNameColumn" text="Document" prefWidth="260"/>
+                                                    <TableColumn fx:id="documentStateColumn" text="Server document state" prefWidth="210"/>
+                                                </columns>
+                                            </TableView>
+                                            <HBox spacing="10">
+                                                <Button text="Open / download" disable="true"/>
+                                                <Button text="Upload document" disable="true"/>
+                                            </HBox>
+                                        </VBox>
+                                        <VBox spacing="10" HBox.hgrow="ALWAYS">
+                                            <Label text="Status history" styleClass="subheading"/>
+                                            <ListView fx:id="history" prefHeight="180"/>
+                                        </VBox>
+                                    </HBox>
+                                    <VBox spacing="12" styleClass="card">
+                                        <Label text="DS decision" styleClass="section-title"/>
+                                        <Label text="Rejections require a reason. Returning to GN requires an explanation. Review the current version and evidence before deciding." wrapText="true" styleClass="muted"/>
+                                        <TextArea fx:id="decisionNote" promptText="Decision note, rejection reason, or explanation for returning to GN" prefRowCount="3" wrapText="true" accessibleText="DS decision explanation"/>
+                                        <HBox spacing="10">
+                                            <ComboBox fx:id="decisionKind" maxWidth="Infinity" HBox.hgrow="ALWAYS" accessibleText="DS decision to validate"/>
+                                            <Button fx:id="checkDecisionButton" text="Check decision fields" onAction="#checkDecision" disable="true"/>
+                                        </HBox>
+                                        <FlowPane hgap="10" vgap="10">
+                                            <Button fx:id="approveButton" text="Approve request" onAction="#approve" disable="true" styleClass="primary-button"/>
+                                            <Button fx:id="rejectButton" text="Reject request" onAction="#reject" disable="true" styleClass="danger-button"/>
+                                            <Button fx:id="returnButton" text="Return to GN" onAction="#returnToGn" disable="true"/>
+                                        </FlowPane>
+                                        <Label text="Decision submission awaits DS server integration. A sent message or acknowledgement is not a committed decision." wrapText="true" styleClass="muted"/>
+                                    </VBox>
+                                </VBox>
+                            </ScrollPane>
+                        </Tab>
+                        <Tab text="Notifications">
+                            <VBox spacing="14" styleClass="section">
+                                <Label text="DS notifications" styleClass="section-title"/>
+                                <Label text="Notifications for your verified DS responsibilities will appear when received from the server." wrapText="true" styleClass="muted"/>
+                                <ListView fx:id="notifications" VBox.vgrow="ALWAYS"/>
+                            </VBox>
+                        </Tab>
+                        <Tab text="Officer Chat">
+                            <VBox spacing="14" styleClass="section">
+                                <Label text="Request-specific officer chat" styleClass="section-title"/>
+                                <Label text="Choose a forwarded request. Conversations and delivery state are supplied by the server." wrapText="true" styleClass="muted"/>
+                                <ComboBox fx:id="chatRequest" promptText="Select a forwarded request" maxWidth="Infinity" accessibleText="DS chat request"/>
+                                <ListView fx:id="conversation" VBox.vgrow="ALWAYS"/>
+                                <TextArea fx:id="chatText" promptText="Officer message about this request" wrapText="true" prefRowCount="3" accessibleText="DS officer chat message"/>
+                                <Button fx:id="sendButton" text="Send officer message" onAction="#sendMessage" disable="true" styleClass="primary-button"/>
+                            </VBox>
+                        </Tab>
+                    </tabs>
+                </TabPane>
+            </VBox>
+        </VBox>
+    </center>
+</BorderPane>

@@ -1,0 +1,4 @@
+/* Shared theme is citizen-dashboard.css; DS-specific accents stay isolated. */
+.danger-button { -fx-background-color: #f9e4e4; -fx-text-fill: #a53131; }
+.danger-button:hover { -fx-background-color: #f1cccc; }
+.version-label { -fx-text-fill: #1d655d; -fx-font-weight: bold; }

@@ -39,6 +39,8 @@ public final class LoginService implements AutoCloseable {
     private final CitizenProtocol citizenProtocol;
     private volatile GnGateway gn;
     private final GnProtocol gnProtocol;
+    private volatile DsGateway ds;
+    private final DsProtocol dsProtocol;
     private volatile boolean closed;
 
     public LoginService(Consumer<NetworkClient.Status> status, Executor callbacks) {
@@ -50,10 +52,15 @@ public final class LoginService implements AutoCloseable {
     }
 
     LoginService(Consumer<NetworkClient.Status> status, Executor callbacks, CitizenProtocol citizenProtocol, GnProtocol gnProtocol) {
+        this(status, callbacks, citizenProtocol, gnProtocol, DsProtocol.pendingBackend());
+    }
+
+    LoginService(Consumer<NetworkClient.Status> status, Executor callbacks, CitizenProtocol citizenProtocol, GnProtocol gnProtocol, DsProtocol dsProtocol) {
         this.status = Objects.requireNonNull(status);
         this.callbacks = Objects.requireNonNull(callbacks);
         this.citizenProtocol = Objects.requireNonNull(citizenProtocol);
         this.gnProtocol = Objects.requireNonNull(gnProtocol);
+        this.dsProtocol = Objects.requireNonNull(dsProtocol);
     }
 
     public CompletableFuture<Message> login(Input input) {
@@ -63,17 +70,22 @@ public final class LoginService implements AutoCloseable {
             if (closed) throw new CompletionException(new IOException("Login service is closed."));
             if (citizen != null) citizen.close();
             if (gn != null) gn.close();
+            if (ds != null) ds.close();
             if (client != null) client.close();
             AtomicReference<CitizenGateway> binding = new AtomicReference<>();
             AtomicReference<GnGateway> gnBinding = new AtomicReference<>();
+            AtomicReference<DsGateway> dsBinding = new AtomicReference<>();
             client = new NetworkClient(input.host(), input.port(), new NetworkClient.Listener() {
                 public void onStatus(NetworkClient.Status value) {
                     CitizenGateway gateway = binding.get();
                     gateway.connectionStatus(value);
                     gnBinding.get().connectionStatus(value);
+                    dsBinding.get().connectionStatus(value);
                     callbacks.execute(() -> { if (citizen == gateway && !closed) status.accept(value); });
                 }
-                public void onMessage(Message message) { binding.get().incoming(message); gnBinding.get().incoming(message); }
+                public void onMessage(Message message) {
+                    binding.get().incoming(message); gnBinding.get().incoming(message); dsBinding.get().incoming(message);
+                }
             }, Runnable::run);
             CitizenGateway gateway = new CitizenGateway(client, citizenProtocol, callbacks);
             binding.set(gateway);
@@ -81,6 +93,8 @@ public final class LoginService implements AutoCloseable {
             GnGateway officerGateway = new GnGateway(client, gnProtocol, callbacks);
             gnBinding.set(officerGateway);
             gn = officerGateway;
+            DsGateway dsGateway = new DsGateway(client, dsProtocol, callbacks);
+            dsBinding.set(dsGateway); ds = dsGateway;
             try {
                 client.connect();
                 if (closed) { client.close(); throw new IOException("Login service is closed."); }
@@ -91,6 +105,7 @@ public final class LoginService implements AutoCloseable {
                         .thenApply(reply -> {
                             gateway.acceptLoginReply(reply);
                             officerGateway.acceptLoginReply(reply);
+                            dsGateway.acceptLoginReply(reply);
                             return reply;
                         });
             } catch (IOException error) { throw new CompletionException(error); }
@@ -114,6 +129,12 @@ public final class LoginService implements AutoCloseable {
         return gateway != null && gateway.isGnAuthorized() ? Optional.of(gateway) : Optional.empty();
     }
 
+    /** Empty until the correlated login reply is validated by the agreed DS contract. */
+    public Optional<DsGateway> dsGateway() {
+        DsGateway gateway = ds;
+        return gateway != null && gateway.isDsAuthorized() ? Optional.of(gateway) : Optional.empty();
+    }
+
     public static String describe(Message reply) {
         if (reply.type() == MessageType.ERROR) {
             String code = reply.payload().path("code").asText("SERVER_ERROR");
@@ -130,6 +151,7 @@ public final class LoginService implements AutoCloseable {
         worker.execute(() -> {
             if (citizen != null) citizen.close();
             if (gn != null) gn.close();
+            if (ds != null) ds.close();
             if (client != null) client.close();
         });
         worker.shutdown();

@@ -47,7 +47,9 @@ public final class LoginController implements AutoCloseable {
             busy(false);
             if (error == null) {
                 feedbackLabel.setText(LoginService.describe(reply));
-                if (service.citizenGateway().isPresent() && service.gnGateway().isPresent()) {
+                int authorizedWorkspaces = (service.citizenGateway().isPresent() ? 1 : 0)
+                        + (service.gnGateway().isPresent() ? 1 : 0) + (service.dsGateway().isPresent() ? 1 : 0);
+                if (authorizedWorkspaces > 1) {
                     feedbackLabel.setText("The server returned ambiguous workspace permissions. Please contact your administrator.");
                     return;
                 }
@@ -61,6 +63,12 @@ public final class LoginController implements AutoCloseable {
                     try { GnDashboardView.open((Stage) loginButton.getScene().getWindow(), gateway); }
                     catch (java.io.IOException | SecurityException failure) {
                         feedbackLabel.setText("Unable to open the GN Officer workspace. Please sign in again.");
+                    }
+                });
+                service.dsGateway().ifPresent(gateway -> {
+                    try { DsDashboardView.open((Stage) loginButton.getScene().getWindow(), gateway); }
+                    catch (java.io.IOException | SecurityException failure) {
+                        feedbackLabel.setText("Unable to open the DS Officer workspace. Please sign in again.");
                     }
                 });
             }
