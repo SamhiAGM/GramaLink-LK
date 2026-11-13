@@ -65,6 +65,7 @@ class LoginServiceTest {
                         .get(3, TimeUnit.SECONDS);
                 assertEquals(MessageType.ERROR, reply.type());
                 assertEquals("NOT_IMPLEMENTED", reply.payload().path("code").asText());
+                assertTrue(service.gnGateway().isEmpty());
                 assertEquals("NOT_IMPLEMENTED: Operation LOGIN is not implemented.", LoginService.describe(reply));
             } finally {
                 service.disconnect().get(3, TimeUnit.SECONDS);
@@ -105,6 +106,24 @@ class LoginServiceTest {
                 JsonUtil.writeMessage(output, new Message(MessageType.LOGIN_OK, login.correlationId(), "unverified", claims));
                 assertEquals(MessageType.LOGIN_OK, pending.get(3, TimeUnit.SECONDS).type());
                 assertTrue(service.citizenGateway().isEmpty(), "An unknown auth payload must never unlock the dashboard");
+                assertTrue(service.gnGateway().isEmpty(), "A Citizen claim must not unlock the GN workspace either");
+            }
+        }
+    }
+
+    @Test void defaultLoginServiceDoesNotTrustGnRoleClaims() throws Exception {
+        try (ServerSocket listener = new ServerSocket(0);
+             LoginService service = new LoginService(status -> { }, Runnable::run)) {
+            listener.setSoTimeout(3000);
+            var pending = service.login(new LoginService.Input("127.0.0.1", listener.getLocalPort(), "officer", "test-only"));
+            try (Socket peer = listener.accept()) {
+                peer.setSoTimeout(3000);
+                Message login = JsonUtil.readMessage(new DataInputStream(peer.getInputStream()));
+                JsonUtil.writeMessage(new DataOutputStream(peer.getOutputStream()), new Message(MessageType.LOGIN_OK, login.correlationId(), "unverified",
+                        JsonNodeFactory.instance.objectNode().put("role", "GN_OFFICER").put("userId", "claimed-officer")));
+                pending.get(3, TimeUnit.SECONDS);
+                assertTrue(service.gnGateway().isEmpty());
+                assertTrue(service.citizenGateway().isEmpty());
             }
         }
     }

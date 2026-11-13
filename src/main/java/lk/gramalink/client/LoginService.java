@@ -37,6 +37,8 @@ public final class LoginService implements AutoCloseable {
     private NetworkClient client; // owned by worker
     private volatile CitizenGateway citizen;
     private final CitizenProtocol citizenProtocol;
+    private volatile GnGateway gn;
+    private final GnProtocol gnProtocol;
     private volatile boolean closed;
 
     public LoginService(Consumer<NetworkClient.Status> status, Executor callbacks) {
@@ -44,9 +46,14 @@ public final class LoginService implements AutoCloseable {
     }
 
     LoginService(Consumer<NetworkClient.Status> status, Executor callbacks, CitizenProtocol citizenProtocol) {
+        this(status, callbacks, citizenProtocol, GnProtocol.pendingBackend());
+    }
+
+    LoginService(Consumer<NetworkClient.Status> status, Executor callbacks, CitizenProtocol citizenProtocol, GnProtocol gnProtocol) {
         this.status = Objects.requireNonNull(status);
         this.callbacks = Objects.requireNonNull(callbacks);
         this.citizenProtocol = Objects.requireNonNull(citizenProtocol);
+        this.gnProtocol = Objects.requireNonNull(gnProtocol);
     }
 
     public CompletableFuture<Message> login(Input input) {
@@ -55,19 +62,25 @@ public final class LoginService implements AutoCloseable {
         return CompletableFuture.supplyAsync(() -> {
             if (closed) throw new CompletionException(new IOException("Login service is closed."));
             if (citizen != null) citizen.close();
+            if (gn != null) gn.close();
             if (client != null) client.close();
             AtomicReference<CitizenGateway> binding = new AtomicReference<>();
+            AtomicReference<GnGateway> gnBinding = new AtomicReference<>();
             client = new NetworkClient(input.host(), input.port(), new NetworkClient.Listener() {
                 public void onStatus(NetworkClient.Status value) {
                     CitizenGateway gateway = binding.get();
                     gateway.connectionStatus(value);
+                    gnBinding.get().connectionStatus(value);
                     callbacks.execute(() -> { if (citizen == gateway && !closed) status.accept(value); });
                 }
-                public void onMessage(Message message) { binding.get().incoming(message); }
+                public void onMessage(Message message) { binding.get().incoming(message); gnBinding.get().incoming(message); }
             }, Runnable::run);
             CitizenGateway gateway = new CitizenGateway(client, citizenProtocol, callbacks);
             binding.set(gateway);
             citizen = gateway;
+            GnGateway officerGateway = new GnGateway(client, gnProtocol, callbacks);
+            gnBinding.set(officerGateway);
+            gn = officerGateway;
             try {
                 client.connect();
                 if (closed) { client.close(); throw new IOException("Login service is closed."); }
@@ -75,7 +88,11 @@ public final class LoginService implements AutoCloseable {
                 var payload = JsonNodeFactory.instance.objectNode()
                         .put("username", input.username()).put("password", input.password());
                 return client.request(new Message(MessageType.LOGIN, payload), Duration.ofSeconds(10))
-                        .thenApply(reply -> { gateway.acceptLoginReply(reply); return reply; });
+                        .thenApply(reply -> {
+                            gateway.acceptLoginReply(reply);
+                            officerGateway.acceptLoginReply(reply);
+                            return reply;
+                        });
             } catch (IOException error) { throw new CompletionException(error); }
         }, worker).thenCompose(reply -> reply);
     }
@@ -89,6 +106,12 @@ public final class LoginService implements AutoCloseable {
     public Optional<CitizenGateway> citizenGateway() {
         CitizenGateway gateway = citizen;
         return gateway != null && gateway.isCitizenAuthorized() ? Optional.of(gateway) : Optional.empty();
+    }
+
+    /** No GN role strings are guessed: the default backend adapter always denies access. */
+    public Optional<GnGateway> gnGateway() {
+        GnGateway gateway = gn;
+        return gateway != null && gateway.isGnAuthorized() ? Optional.of(gateway) : Optional.empty();
     }
 
     public static String describe(Message reply) {
@@ -106,6 +129,7 @@ public final class LoginService implements AutoCloseable {
         closed = true;
         worker.execute(() -> {
             if (citizen != null) citizen.close();
+            if (gn != null) gn.close();
             if (client != null) client.close();
         });
         worker.shutdown();

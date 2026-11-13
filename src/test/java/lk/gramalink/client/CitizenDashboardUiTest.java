@@ -22,15 +22,10 @@ import static org.junit.jupiter.api.Assertions.*;
 @Timeout(20)
 class CitizenDashboardUiTest {
     @BeforeAll static void toolkit() throws Exception {
-        CompletableFuture<Void> ready = new CompletableFuture<>();
-        Platform.startup(() -> { Platform.setImplicitExit(false); ready.complete(null); });
-        ready.get(10, TimeUnit.SECONDS);
+        FxTestSupport.start();
     }
-    @AfterAll static void stopToolkit() { Platform.exit(); }
     private static <T> T fx(Callable<T> action) throws Exception {
-        FutureTask<T> task = new FutureTask<>(action);
-        Platform.runLater(task);
-        return task.get(5, TimeUnit.SECONDS);
+        return FxTestSupport.fx(action);
     }
     private record Ui(FXMLLoader loader, Parent root, OfflineCitizenWorkspace fixture) implements AutoCloseable {
         @SuppressWarnings("unchecked") <T> T node(String id) { return (T)loader.getNamespace().get(id); }

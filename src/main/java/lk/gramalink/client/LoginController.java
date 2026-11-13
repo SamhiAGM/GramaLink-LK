@@ -47,10 +47,20 @@ public final class LoginController implements AutoCloseable {
             busy(false);
             if (error == null) {
                 feedbackLabel.setText(LoginService.describe(reply));
+                if (service.citizenGateway().isPresent() && service.gnGateway().isPresent()) {
+                    feedbackLabel.setText("The server returned ambiguous workspace permissions. Please contact your administrator.");
+                    return;
+                }
                 service.citizenGateway().ifPresent(gateway -> {
                     try { CitizenDashboardView.open((Stage) loginButton.getScene().getWindow(), gateway); }
                     catch (java.io.IOException | SecurityException failure) {
                         feedbackLabel.setText("Unable to open the Citizen workspace. Please sign in again.");
+                    }
+                });
+                service.gnGateway().ifPresent(gateway -> {
+                    try { GnDashboardView.open((Stage) loginButton.getScene().getWindow(), gateway); }
+                    catch (java.io.IOException | SecurityException failure) {
+                        feedbackLabel.setText("Unable to open the GN Officer workspace. Please sign in again.");
                     }
                 });
             }

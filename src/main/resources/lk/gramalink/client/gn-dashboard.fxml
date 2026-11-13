@@ -1,0 +1,147 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+<?import javafx.scene.shape.Circle?>
+<BorderPane xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1"
+            fx:controller="lk.gramalink.client.GnDashboardController" styleClass="citizen-root">
+    <left>
+        <VBox spacing="12" prefWidth="215" minWidth="190" styleClass="sidebar">
+            <Label text="GL" styleClass="brand-mark"/>
+            <Label text="GramaLink LK" styleClass="brand-name"/>
+            <Label text="GN OFFICER WORKSPACE" styleClass="sidebar-caption"/>
+            <Separator/>
+            <Button fx:id="navDashboard" text="Dashboard" onAction="#showDashboard" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button fx:id="navRequests" text="Assigned Requests" onAction="#showRequests" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button fx:id="navNotifications" text="Notifications" onAction="#showNotifications" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button fx:id="navMessages" text="Request Messages" onAction="#showMessages" maxWidth="Infinity" styleClass="nav-button"/>
+            <Region VBox.vgrow="ALWAYS"/>
+            <Label text="Review with care.&#10;Keep your community informed." wrapText="true" styleClass="sidebar-caption"/>
+            <Button text="Back to sign in" onAction="#signOut" maxWidth="Infinity" styleClass="nav-button"/>
+        </VBox>
+    </left>
+    <center>
+        <VBox spacing="16" styleClass="main-area">
+            <HBox spacing="12" alignment="CENTER_LEFT">
+                <VBox spacing="5" HBox.hgrow="ALWAYS">
+                    <Label text="LOCAL SERVICES · OFFICER DESK" styleClass="eyebrow"/>
+                    <Label text="GN Officer dashboard" styleClass="page-title"/>
+                    <Label fx:id="officerName" text="GN Officer authorization required" styleClass="muted"/>
+                </VBox>
+                <Circle fx:id="connectionDot" radius="5" styleClass="offline"/>
+                <Label fx:id="connectionLabel" text="Not connected"/>
+            </HBox>
+            <Label fx:id="feedback" text="Officer actions are awaiting server support. Request and document statuses only change when confirmed by authoritative server updates."
+                   wrapText="true" maxWidth="Infinity" styleClass="notice"/>
+            <HBox fx:id="activityRow" spacing="10" alignment="CENTER_LEFT">
+                <ProgressIndicator fx:id="busyIndicator" visible="false" prefWidth="20" prefHeight="20"/>
+                <Label fx:id="activityLabel" styleClass="muted"/>
+            </HBox>
+            <VBox fx:id="workspace" VBox.vgrow="ALWAYS">
+                <TabPane fx:id="sections" tabClosingPolicy="UNAVAILABLE" VBox.vgrow="ALWAYS">
+                    <tabs>
+                        <Tab text="Dashboard">
+                            <ScrollPane fitToWidth="true">
+                                <VBox spacing="20" styleClass="section">
+                                    <Label text="Your officer desk" styleClass="section-title"/>
+                                    <Label text="Review assigned requests, check supporting documents and keep citizens informed." wrapText="true" styleClass="muted"/>
+                                    <HBox spacing="16">
+                                        <VBox spacing="10" styleClass="metric-card" HBox.hgrow="ALWAYS">
+                                            <Label text="ASSIGNED REQUESTS" styleClass="eyebrow"/>
+                                            <Label fx:id="assignedCount" text="—" styleClass="metric"/>
+                                            <Label fx:id="assignedCaption" text="Awaiting server data" wrapText="true" styleClass="muted"/>
+                                        </VBox>
+                                        <VBox spacing="10" styleClass="metric-card" HBox.hgrow="ALWAYS">
+                                            <Label text="OFFICER NOTIFICATIONS" styleClass="eyebrow"/>
+                                            <Label fx:id="notificationCount" text="—" styleClass="metric"/>
+                                            <Label fx:id="notificationCaption" text="Awaiting server data" wrapText="true" styleClass="muted"/>
+                                        </VBox>
+                                    </HBox>
+                                    <Button text="Review assigned requests" onAction="#showRequests" styleClass="primary-button"/>
+                                    <HBox spacing="16">
+                                        <VBox spacing="10" HBox.hgrow="ALWAYS">
+                                            <Label text="Assignments by current status" styleClass="subheading"/>
+                                            <ListView fx:id="statusBreakdown" prefHeight="240"/>
+                                        </VBox>
+                                        <VBox spacing="10" HBox.hgrow="ALWAYS">
+                                            <Label text="Relevant notifications" styleClass="subheading"/>
+                                            <ListView fx:id="recentNotifications" prefHeight="240"/>
+                                        </VBox>
+                                    </HBox>
+                                </VBox>
+                            </ScrollPane>
+                        </Tab>
+                        <Tab text="Assigned Requests">
+                            <ScrollPane fx:id="requestsScroll" fitToWidth="true">
+                                <VBox spacing="16" styleClass="section">
+                                    <Label text="Assigned requests" styleClass="section-title"/>
+                                    <Label text="Only server-authorized assignments belong here. Priority is shown only when supplied by the server." wrapText="true" styleClass="muted"/>
+                                    <TableView fx:id="assignedRequests" prefHeight="210" minHeight="170">
+                                        <columns>
+                                            <TableColumn fx:id="idColumn" text="Request ID" prefWidth="140"/>
+                                            <TableColumn fx:id="citizenColumn" text="Citizen" prefWidth="160"/>
+                                            <TableColumn fx:id="typeColumn" text="Request type" prefWidth="160"/>
+                                            <TableColumn fx:id="dateColumn" text="Submitted (Sri Lanka)" prefWidth="175"/>
+                                            <TableColumn fx:id="statusColumn" text="Status" prefWidth="150"/>
+                                            <TableColumn fx:id="priorityColumn" text="Priority (if supplied)" prefWidth="155"/>
+                                        </columns>
+                                    </TableView>
+                                    <Label fx:id="detailsHeading" text="Select an assigned request" styleClass="subheading"/>
+                                    <Label fx:id="detailsDescription" text="Request details have not been loaded from the server." wrapText="true"/>
+                                    <HBox spacing="16">
+                                        <VBox spacing="10" HBox.hgrow="ALWAYS">
+                                            <Label text="Supporting documents" styleClass="subheading"/>
+                                            <TableView fx:id="documents" prefHeight="180">
+                                                <columns>
+                                                    <TableColumn fx:id="documentNameColumn" text="Document" prefWidth="240"/>
+                                                    <TableColumn fx:id="verificationColumn" text="Verification status" prefWidth="200"/>
+                                                </columns>
+                                            </TableView>
+                                            <Button text="Open / download document" disable="true"/>
+                                        </VBox>
+                                        <VBox spacing="10" HBox.hgrow="ALWAYS">
+                                            <Label text="Request history" styleClass="subheading"/>
+                                            <ListView fx:id="history" prefHeight="180"/>
+                                        </VBox>
+                                    </HBox>
+                                    <VBox spacing="12" styleClass="card">
+                                        <Label text="Review and next steps" styleClass="section-title"/>
+                                        <Label text="Select a document before verifying. More-information requests and rejections require a clear reason; forwarding notes are optional." wrapText="true" styleClass="muted"/>
+                                        <TextArea fx:id="actionNote" promptText="Reason, requested information, or forwarding note" prefRowCount="3" wrapText="true" accessibleText="Officer action reason"/>
+                                        <HBox spacing="10">
+                                            <ComboBox fx:id="actionKind" maxWidth="Infinity" HBox.hgrow="ALWAYS" accessibleText="Action to validate"/>
+                                            <Button fx:id="checkActionButton" text="Check action fields" onAction="#checkAction" disable="true"/>
+                                        </HBox>
+                                        <FlowPane hgap="10" vgap="10">
+                                            <Button fx:id="verifyButton" text="Verify selected document" onAction="#verifyDocument" disable="true"/>
+                                            <Button fx:id="informationButton" text="Request more information" onAction="#requestInformation" disable="true"/>
+                                            <Button fx:id="forwardButton" text="Forward to DS" onAction="#forwardToDs" disable="true" styleClass="primary-button"/>
+                                            <Button fx:id="rejectButton" text="Reject request" onAction="#rejectRequest" disable="true" styleClass="danger-button"/>
+                                        </FlowPane>
+                                        <Label text="These actions require server authorization and an available officer service. Document download and verification are not yet integrated." wrapText="true" styleClass="muted"/>
+                                    </VBox>
+                                </VBox>
+                            </ScrollPane>
+                        </Tab>
+                        <Tab text="Notifications">
+                            <VBox spacing="14" styleClass="section">
+                                <Label text="Officer notifications" styleClass="section-title"/>
+                                <Label text="Updates relevant to your verified officer assignments will appear here." wrapText="true" styleClass="muted"/>
+                                <ListView fx:id="notifications" VBox.vgrow="ALWAYS"/>
+                            </VBox>
+                        </Tab>
+                        <Tab text="Request Messages">
+                            <VBox spacing="14" styleClass="section">
+                                <Label text="Request-specific conversation" styleClass="section-title"/>
+                                <Label text="Select an assigned request. Sent messages appear only after confirmed server events; no local message is treated as delivered." wrapText="true" styleClass="muted"/>
+                                <ComboBox fx:id="messageRequest" promptText="Select an assigned request" maxWidth="Infinity" accessibleText="Officer message request"/>
+                                <ListView fx:id="conversation" VBox.vgrow="ALWAYS"/>
+                                <TextArea fx:id="chatText" promptText="Message about this request" prefRowCount="3" wrapText="true" accessibleText="Officer request message"/>
+                                <Button fx:id="sendButton" text="Send message" onAction="#sendMessage" disable="true" styleClass="primary-button"/>
+                            </VBox>
+                        </Tab>
+                    </tabs>
+                </TabPane>
+            </VBox>
+        </VBox>
+    </center>
+</BorderPane>
