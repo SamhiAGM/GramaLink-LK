@@ -14,5 +14,9 @@ public enum MessageType {
     FILE_CHUNK,
     HEARTBEAT,
     ACK,
-    ERROR
+    ERROR,
+    // Additive backend query/admin commands; existing wire names are unchanged.
+    ME, GET_REQUEST, LIST_REQUESTS, GET_HISTORY, GET_CHAT, GET_NOTIFICATIONS,
+    READ_NOTIFICATION, LIST_DOCUMENTS, LIST_OFFICES, LIST_USERS, CREATE_USER,
+    SET_USER_ACTIVE, CREATE_OFFICE, RENAME_OFFICE, GET_STATISTICS, GET_AUDIT
 }

@@ -6,6 +6,8 @@ import lk.gramalink.shared.Message;
 import java.io.IOException;
 import java.util.Objects;
 import java.util.UUID;
+import java.util.Optional;
+import java.io.InputStream;
 
 /**
  * Backend integration boundary, not an authorization or storage implementation.
@@ -37,6 +39,16 @@ public interface FileTransferService {
 
     /** Release resources on protocol failure or disconnect; must be safe to call once per grant. */
     default void abort(SessionManager.Session session, Grant grant) {
+    }
+
+    /** Optional durable-completion response; legacy transport-only services return empty. */
+    default Optional<Message> completion(SessionManager.Session session, UUID transferId) throws IOException {
+        return Optional.empty();
+    }
+
+    /** Opens an already-authorized backend download. The handler closes the returned stream. */
+    default InputStream download(SessionManager.Session session, Grant grant) throws IOException {
+        throw new UnavailableException();
     }
 
     static FileTransferService unavailable() {
