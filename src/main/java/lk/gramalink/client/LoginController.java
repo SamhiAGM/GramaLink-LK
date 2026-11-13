@@ -5,6 +5,7 @@ import javafx.fxml.FXML;
 import javafx.scene.control.*;
 import javafx.scene.layout.VBox;
 import javafx.scene.shape.Circle;
+import javafx.stage.Stage;
 
 import java.util.concurrent.CompletionException;
 import java.util.concurrent.TimeoutException;
@@ -44,7 +45,15 @@ public final class LoginController implements AutoCloseable {
         service.login(input).whenComplete((reply, error) -> Platform.runLater(() -> {
             if (closed) return;
             busy(false);
-            if (error == null) feedbackLabel.setText(LoginService.describe(reply));
+            if (error == null) {
+                feedbackLabel.setText(LoginService.describe(reply));
+                service.citizenGateway().ifPresent(gateway -> {
+                    try { CitizenDashboardView.open((Stage) loginButton.getScene().getWindow(), gateway); }
+                    catch (java.io.IOException | SecurityException failure) {
+                        feedbackLabel.setText("Unable to open the Citizen workspace. Please sign in again.");
+                    }
+                });
+            }
             else {
                 Throwable cause = error;
                 while (cause instanceof CompletionException && cause.getCause() != null) cause = cause.getCause();

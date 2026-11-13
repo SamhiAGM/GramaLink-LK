@@ -7,6 +7,8 @@ import lk.gramalink.shared.MessageType;
 import java.io.IOException;
 import java.time.Duration;
 import java.util.Objects;
+import java.util.Optional;
+import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
 
@@ -33,11 +35,18 @@ public final class LoginService implements AutoCloseable {
     private final Consumer<NetworkClient.Status> status;
     private final Executor callbacks;
     private NetworkClient client; // owned by worker
+    private volatile CitizenGateway citizen;
+    private final CitizenProtocol citizenProtocol;
     private volatile boolean closed;
 
     public LoginService(Consumer<NetworkClient.Status> status, Executor callbacks) {
+        this(status, callbacks, CitizenProtocol.pendingBackend());
+    }
+
+    LoginService(Consumer<NetworkClient.Status> status, Executor callbacks, CitizenProtocol citizenProtocol) {
         this.status = Objects.requireNonNull(status);
         this.callbacks = Objects.requireNonNull(callbacks);
+        this.citizenProtocol = Objects.requireNonNull(citizenProtocol);
     }
 
     public CompletableFuture<Message> login(Input input) {
@@ -45,17 +54,28 @@ public final class LoginService implements AutoCloseable {
         if (closed) return CompletableFuture.failedFuture(new IllegalStateException("Login service is closed."));
         return CompletableFuture.supplyAsync(() -> {
             if (closed) throw new CompletionException(new IOException("Login service is closed."));
+            if (citizen != null) citizen.close();
             if (client != null) client.close();
+            AtomicReference<CitizenGateway> binding = new AtomicReference<>();
             client = new NetworkClient(input.host(), input.port(), new NetworkClient.Listener() {
-                public void onStatus(NetworkClient.Status value) { status.accept(value); }
-            }, callbacks);
+                public void onStatus(NetworkClient.Status value) {
+                    CitizenGateway gateway = binding.get();
+                    gateway.connectionStatus(value);
+                    callbacks.execute(() -> { if (citizen == gateway && !closed) status.accept(value); });
+                }
+                public void onMessage(Message message) { binding.get().incoming(message); }
+            }, Runnable::run);
+            CitizenGateway gateway = new CitizenGateway(client, citizenProtocol, callbacks);
+            binding.set(gateway);
+            citizen = gateway;
             try {
                 client.connect();
                 if (closed) { client.close(); throw new IOException("Login service is closed."); }
                 // Provisional payload contract: Shadhir must confirm these field names when adding AuthService.
                 var payload = JsonNodeFactory.instance.objectNode()
                         .put("username", input.username()).put("password", input.password());
-                return client.request(new Message(MessageType.LOGIN, payload), Duration.ofSeconds(10));
+                return client.request(new Message(MessageType.LOGIN, payload), Duration.ofSeconds(10))
+                        .thenApply(reply -> { gateway.acceptLoginReply(reply); return reply; });
             } catch (IOException error) { throw new CompletionException(error); }
         }, worker).thenCompose(reply -> reply);
     }
@@ -63,6 +83,12 @@ public final class LoginService implements AutoCloseable {
     public CompletableFuture<Void> disconnect() {
         if (closed) return CompletableFuture.completedFuture(null);
         return CompletableFuture.runAsync(() -> { if (client != null) client.close(); }, worker);
+    }
+
+    /** Empty until the correlated server reply has been validated by the agreed Citizen auth contract. */
+    public Optional<CitizenGateway> citizenGateway() {
+        CitizenGateway gateway = citizen;
+        return gateway != null && gateway.isCitizenAuthorized() ? Optional.of(gateway) : Optional.empty();
     }
 
     public static String describe(Message reply) {
@@ -78,7 +104,10 @@ public final class LoginService implements AutoCloseable {
     @Override public void close() {
         if (closed) return;
         closed = true;
-        worker.execute(() -> { if (client != null) client.close(); });
+        worker.execute(() -> {
+            if (citizen != null) citizen.close();
+            if (client != null) client.close();
+        });
         worker.shutdown();
     }
 }

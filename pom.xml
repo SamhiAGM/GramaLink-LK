@@ -63,4 +63,24 @@
             </plugin>
         </plugins>
     </build>
+    <profiles>
+        <!-- Explicitly opt-in: the offline preview and fixtures exist only in test sources. -->
+        <profile>
+            <id>citizen-preview</id>
+            <build>
+                <plugins>
+                    <plugin>
+                        <groupId>org.codehaus.mojo</groupId>
+                        <artifactId>exec-maven-plugin</artifactId>
+                        <version>3.5.0</version>
+                        <configuration>
+                            <mainClass>lk.gramalink.client.CitizenDashboardPreview</mainClass>
+                            <classpathScope>test</classpathScope>
+                            <cleanupDaemonThreads>false</cleanupDaemonThreads>
+                        </configuration>
+                    </plugin>
+                </plugins>
+            </build>
+        </profile>
+    </profiles>
 </project>

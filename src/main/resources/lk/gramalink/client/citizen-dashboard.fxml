@@ -1,0 +1,187 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+<?import javafx.scene.shape.Circle?>
+<BorderPane xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1"
+            fx:controller="lk.gramalink.client.CitizenDashboardController" styleClass="citizen-root">
+    <left>
+        <VBox spacing="8" prefWidth="215" minWidth="190" styleClass="sidebar">
+            <Label text="GL" styleClass="brand-mark"/>
+            <Label text="GramaLink LK" styleClass="brand-name"/>
+            <Label text="CITIZEN WORKSPACE" styleClass="sidebar-caption"/>
+            <Separator/>
+            <Button fx:id="navDashboard" text="Dashboard" onAction="#showOverview" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button fx:id="navNewRequest" text="New Request" onAction="#showNewRequest" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button fx:id="navRequests" text="My Requests" onAction="#showRequests" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button fx:id="navNotifications" text="Notifications" onAction="#showNotifications" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button fx:id="navDocuments" text="Documents" onAction="#showDocuments" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button fx:id="navMessages" text="Messages" onAction="#showMessages" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button fx:id="navProfile" text="Profile" onAction="#showProfile" maxWidth="Infinity" styleClass="nav-button"/>
+            <Region VBox.vgrow="ALWAYS"/>
+            <Label text="Your local services,&#10;in one place." styleClass="sidebar-caption" wrapText="true"/>
+            <Button text="Back to sign in" onAction="#signOut" maxWidth="Infinity" styleClass="nav-button"/>
+        </VBox>
+    </left>
+    <center>
+        <VBox spacing="16" styleClass="main-area">
+            <HBox spacing="12" alignment="CENTER_LEFT">
+                <VBox spacing="5" HBox.hgrow="ALWAYS">
+                    <Label text="Your community, connected" styleClass="eyebrow"/>
+                    <Label text="Citizen dashboard" styleClass="page-title"/>
+                    <Label fx:id="citizenName" text="Citizen identity required" styleClass="muted"/>
+                </VBox>
+                <Circle fx:id="connectionDot" radius="5" styleClass="offline"/>
+                <Label fx:id="connectionLabel" text="Not connected"/>
+            </HBox>
+            <Label fx:id="feedback" text="Some services are awaiting availability on your server. Requests and messages are never saved as successful until confirmed by the server."
+                   wrapText="true" maxWidth="Infinity" styleClass="notice"/>
+            <HBox fx:id="activityRow" spacing="10" alignment="CENTER_LEFT">
+                <ProgressIndicator fx:id="busyIndicator" visible="false" prefWidth="20" prefHeight="20"/>
+                <Label fx:id="activityLabel" visible="false" styleClass="muted"/>
+            </HBox>
+            <VBox fx:id="workspace" VBox.vgrow="ALWAYS">
+                <TabPane fx:id="sections" tabClosingPolicy="UNAVAILABLE" VBox.vgrow="ALWAYS">
+                    <tabs>
+                        <Tab fx:id="overviewTab" text="Dashboard">
+                            <ScrollPane fitToWidth="true">
+                                <VBox spacing="22" styleClass="section">
+                                    <Label text="Welcome to your workspace" styleClass="section-title"/>
+                                    <Label text="Track local service requests, follow their progress and stay in touch with your office." wrapText="true" styleClass="muted"/>
+                                    <HBox spacing="16">
+                                        <VBox spacing="10" styleClass="metric-card" HBox.hgrow="ALWAYS">
+                                            <Label text="MY REQUESTS" styleClass="eyebrow"/>
+                                            <Label fx:id="requestCount" text="—" styleClass="metric"/>
+                                            <Label fx:id="requestCountCaption" text="Awaiting server data" styleClass="muted"/>
+                                        </VBox>
+                                        <VBox spacing="10" styleClass="metric-card" HBox.hgrow="ALWAYS">
+                                            <Label text="NOTIFICATIONS" styleClass="eyebrow"/>
+                                            <Label fx:id="notificationCount" text="—" styleClass="metric"/>
+                                            <Label fx:id="notificationCountCaption" text="Awaiting server data" styleClass="muted"/>
+                                        </VBox>
+                                    </HBox>
+                                    <VBox spacing="12" styleClass="card">
+                                        <Label text="How can we help?" styleClass="section-title"/>
+                                        <Label text="Prepare a new request with your GN division and a description. You can also select a supporting document locally."
+                                               wrapText="true" styleClass="muted"/>
+                                        <Button text="Prepare a request" onAction="#showNewRequest" styleClass="primary-button"/>
+                                    </VBox>
+                                    <Label fx:id="overviewHint" text="No request history has been loaded. Open My requests to view information received from the server." wrapText="true" styleClass="muted"/>
+                                </VBox>
+                            </ScrollPane>
+                        </Tab>
+                        <Tab fx:id="newRequestTab" text="New request">
+                            <ScrollPane fitToWidth="true">
+                                <VBox spacing="14" styleClass="section">
+                                    <Label text="New service request" styleClass="section-title"/>
+                                    <Label text="Request type"/>
+                                    <TextField fx:id="requestType" promptText="Request type supplied by your local office" accessibleText="Request type"/>
+                                    <Label text="GN division"/>
+                                    <TextField fx:id="division" promptText="Enter your GN division" accessibleText="GN division"/>
+                                    <Label text="Description"/>
+                                    <TextArea fx:id="description" promptText="Explain what you need and include any relevant information." wrapText="true" prefRowCount="4" accessibleText="Request description"/>
+                                    <VBox spacing="10" styleClass="card">
+                                        <Label text="Supporting document (optional)" styleClass="subheading"/>
+                                        <Label fx:id="attachmentLabel" text="No attachment selected" wrapText="true"/>
+                                        <HBox spacing="10">
+                                            <Button fx:id="chooseAttachmentButton" text="Choose file…" onAction="#chooseAttachment"/>
+                                            <Button fx:id="removeAttachmentButton" text="Remove" onAction="#removeAttachment" disable="true"/>
+                                            <Button text="Upload attachment" disable="true"/>
+                                        </HBox>
+                                        <ProgressBar fx:id="transferProgress" progress="0" maxWidth="Infinity"/>
+                                        <Label fx:id="transferLabel" text="No transfer started" wrapText="true" styleClass="muted"/>
+                                    </VBox>
+                                    <Label text="Submission and document upload are not available on this server yet. Selecting a document does not upload it." wrapText="true" styleClass="muted"/>
+                                    <HBox spacing="10">
+                                        <Button fx:id="validateButton" text="Check form" onAction="#validateDraft"/>
+                                        <Button fx:id="submitButton" text="Submit request" onAction="#submitRequest" disable="true" styleClass="primary-button"/>
+                                    </HBox>
+                                </VBox>
+                            </ScrollPane>
+                        </Tab>
+                        <Tab fx:id="requestsTab" text="My requests">
+                            <VBox spacing="12" styleClass="section">
+                                <Label text="My requests" styleClass="section-title"/>
+                                <Label text="Select a request to view its details, status history and messages. Request loading awaits availability on your server." wrapText="true" styleClass="muted"/>
+                                <TableView fx:id="requestsTable" prefHeight="210" VBox.vgrow="SOMETIMES">
+                                    <columns>
+                                        <TableColumn fx:id="idColumn" text="Request ID" prefWidth="160"/>
+                                        <TableColumn fx:id="typeColumn" text="Type" prefWidth="180"/>
+                                        <TableColumn fx:id="dateColumn" text="Submitted (Sri Lanka)" prefWidth="190"/>
+                                        <TableColumn fx:id="statusColumn" text="Status" prefWidth="140"/>
+                                    </columns>
+                                </TableView>
+                                <Label fx:id="detailsLabel" text="Select a request to see its details." wrapText="true"/>
+                                <SplitPane dividerPositions="0.48" VBox.vgrow="ALWAYS">
+                                    <VBox spacing="9" styleClass="detail-pane">
+                                        <Label text="Status timeline" styleClass="subheading"/>
+                                        <ListView fx:id="timeline" prefHeight="180" VBox.vgrow="ALWAYS"/>
+                                    </VBox>
+                                    <VBox spacing="9" styleClass="detail-pane">
+                                        <Label text="Request messages" styleClass="subheading"/>
+                                        <ListView fx:id="messages" prefHeight="150" VBox.vgrow="ALWAYS"/>
+                                        <TextArea fx:id="messageText" promptText="Message about the selected request" wrapText="true" prefRowCount="2" accessibleText="Request message"/>
+                                        <Button fx:id="sendButton" text="Send message" onAction="#sendMessage" disable="true" styleClass="primary-button"/>
+                                    </VBox>
+                                </SplitPane>
+                            </VBox>
+                        </Tab>
+                        <Tab fx:id="notificationsTab" text="Notifications">
+                            <VBox spacing="14" styleClass="section">
+                                <Label text="Notifications" styleClass="section-title"/>
+                                <Label text="Updates from your local office will appear here when received from the server." wrapText="true" styleClass="muted"/>
+                                <ListView fx:id="notifications" VBox.vgrow="ALWAYS"/>
+                            </VBox>
+                        </Tab>
+                        <Tab fx:id="documentsTab" text="Documents">
+                            <ScrollPane fitToWidth="true">
+                                <VBox spacing="16" styleClass="section">
+                                    <Label text="Supporting documents" styleClass="section-title"/>
+                                    <Label text="Manage the optional document for your current request draft. Files remain on your device until an authorized upload is available." wrapText="true" styleClass="muted"/>
+                                    <VBox spacing="14" styleClass="card">
+                                        <Label text="Current draft attachment" styleClass="subheading"/>
+                                        <Label fx:id="documentLabel" text="No attachment selected" wrapText="true"/>
+                                        <HBox spacing="10">
+                                            <Button fx:id="documentChooseButton" text="Choose file…" onAction="#chooseAttachment"/>
+                                            <Button fx:id="documentRemoveButton" text="Remove attachment" onAction="#removeAttachment"/>
+                                            <Button text="Upload" disable="true"/>
+                                        </HBox>
+                                        <ProgressBar fx:id="documentProgress" progress="0" maxWidth="Infinity"/>
+                                        <Label fx:id="documentProgressLabel" text="No transfer started" wrapText="true" styleClass="muted"/>
+                                    </VBox>
+                                    <Label text="Uploaded documents" styleClass="subheading"/>
+                                    <Label text="Document history has not been loaded. Upload, download and storage confirmation require support from your server." wrapText="true" styleClass="muted"/>
+                                </VBox>
+                            </ScrollPane>
+                        </Tab>
+                        <Tab fx:id="messagesTab" text="Messages">
+                            <VBox spacing="14" styleClass="section">
+                                <Label text="Request conversations" styleClass="section-title"/>
+                                <Label text="Choose a request to see its conversation. Messages are only added after they are received from the server." wrapText="true" styleClass="muted"/>
+                                <ComboBox fx:id="messageRequest" promptText="Select a request" maxWidth="Infinity" accessibleText="Message request"/>
+                                <ListView fx:id="conversation" VBox.vgrow="ALWAYS"/>
+                                <TextArea fx:id="conversationText" promptText="Write a message about the selected request" wrapText="true" prefRowCount="3" accessibleText="Conversation message"/>
+                                <Button fx:id="conversationSendButton" text="Send message" onAction="#sendConversation" disable="true" styleClass="primary-button"/>
+                            </VBox>
+                        </Tab>
+                        <Tab fx:id="profileTab" text="Profile">
+                            <ScrollPane fitToWidth="true">
+                                <VBox spacing="16" styleClass="section">
+                                    <Label text="Your profile" styleClass="section-title"/>
+                                    <Label text="Identity supplied by the authenticated server session." styleClass="muted" wrapText="true"/>
+                                    <VBox spacing="12" styleClass="card">
+                                        <Label text="DISPLAY NAME" styleClass="eyebrow"/>
+                                        <Label fx:id="profileName" text="Not available" styleClass="subheading"/>
+                                        <Separator/>
+                                        <Label text="USER ID" styleClass="eyebrow"/>
+                                        <Label fx:id="profileUserId" text="Not available"/>
+                                    </VBox>
+                                    <Label text="Additional profile details and editing are not available from this server yet." wrapText="true" styleClass="muted"/>
+                                </VBox>
+                            </ScrollPane>
+                        </Tab>
+                    </tabs>
+                </TabPane>
+            </VBox>
+        </VBox>
+    </center>
+</BorderPane>

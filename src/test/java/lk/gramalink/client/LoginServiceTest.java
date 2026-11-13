@@ -90,4 +90,22 @@ class LoginServiceTest {
         String description = LoginService.describe(new Message(MessageType.LOGIN_OK, JsonNodeFactory.instance.objectNode()));
         assertTrue(description.contains("Dashboard access is not available"));
     }
+
+    @Test void defaultLoginServiceRejectsUnsolicitedAndCorrelatedCitizenClaims() throws Exception {
+        try (ServerSocket listener = new ServerSocket(0);
+             LoginService service = new LoginService(status -> { }, Runnable::run)) {
+            listener.setSoTimeout(3000);
+            var pending = service.login(new LoginService.Input("127.0.0.1", listener.getLocalPort(), "user", "test-only"));
+            try (Socket peer = listener.accept()) {
+                peer.setSoTimeout(3000);
+                Message login = JsonUtil.readMessage(new DataInputStream(peer.getInputStream()));
+                var output = new DataOutputStream(peer.getOutputStream());
+                var claims = JsonNodeFactory.instance.objectNode().put("role", "CITIZEN").put("userId", "claimed");
+                JsonUtil.writeMessage(output, new Message(MessageType.LOGIN_OK, "unsolicited", "unverified", claims));
+                JsonUtil.writeMessage(output, new Message(MessageType.LOGIN_OK, login.correlationId(), "unverified", claims));
+                assertEquals(MessageType.LOGIN_OK, pending.get(3, TimeUnit.SECONDS).type());
+                assertTrue(service.citizenGateway().isEmpty(), "An unknown auth payload must never unlock the dashboard");
+            }
+        }
+    }
 }
