@@ -1,0 +1,49 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<?import javafx.scene.control.*?>
+<?import javafx.scene.layout.*?>
+<?import javafx.scene.shape.Circle?>
+<HBox xmlns="http://javafx.com/javafx/21" xmlns:fx="http://javafx.com/fxml/1"
+      fx:controller="lk.gramalink.client.LoginController" styleClass="app-root">
+    <VBox prefWidth="330" minWidth="290" spacing="22" styleClass="brand-panel">
+        <Label text="GL" styleClass="brand-mark"/>
+        <Label text="GramaLink LK" styleClass="brand-title"/>
+        <Label text="Your community.&#10;Better connected." styleClass="brand-tagline" wrapText="true"/>
+        <Region VBox.vgrow="ALWAYS"/>
+        <Label text="LOCAL SERVICES, CONNECTED" styleClass="eyebrow"/>
+        <Label text="One place for citizens and officers to connect with local services." styleClass="brand-description" wrapText="true"/>
+        <Separator/>
+        <Label text="Citizen  ·  Grama Niladhari  ·  Divisional Secretariat" styleClass="brand-description" wrapText="true"/>
+    </VBox>
+    <VBox spacing="15" alignment="CENTER_LEFT" styleClass="login-panel" HBox.hgrow="ALWAYS">
+        <Label text="WELCOME BACK" styleClass="eyebrow accent"/>
+        <Label text="Sign in to GramaLink" styleClass="heading"/>
+        <Label text="Connect to your local server to get started." styleClass="muted" wrapText="true"/>
+        <HBox spacing="8" alignment="CENTER_LEFT" styleClass="connection-badge">
+            <Circle fx:id="statusDot" radius="4.5" styleClass="offline"/>
+            <Label fx:id="statusLabel" text="Disconnected" styleClass="status-text"/>
+        </HBox>
+        <VBox fx:id="inputFields" spacing="10">
+            <Label text="SERVER CONNECTION" styleClass="section-label"/>
+            <HBox spacing="12">
+                <VBox spacing="6" HBox.hgrow="ALWAYS">
+                    <Label text="Server IP / hostname" labelFor="$hostField"/>
+                    <TextField fx:id="hostField" promptText="127.0.0.1" accessibleText="Server IP or hostname"/>
+                </VBox>
+                <VBox spacing="6" prefWidth="100" minWidth="100">
+                    <Label text="Port" labelFor="$portField"/>
+                    <TextField fx:id="portField" promptText="5000" prefWidth="100" accessibleText="Server port"/>
+                </VBox>
+            </HBox>
+            <Label text="YOUR ACCOUNT" styleClass="section-label"/>
+            <Label text="Username" labelFor="$usernameField"/>
+            <TextField fx:id="usernameField" promptText="Enter your username" accessibleText="Username"/>
+            <Label text="Password" labelFor="$passwordField"/>
+            <PasswordField fx:id="passwordField" promptText="Enter your password" onAction="#login" accessibleText="Password"/>
+        </VBox>
+        <HBox spacing="10">
+            <Button fx:id="loginButton" text="Connect &amp; log in" onAction="#login" defaultButton="true" maxWidth="Infinity" HBox.hgrow="ALWAYS" styleClass="primary-button"/>
+            <Button fx:id="disconnectButton" text="Disconnect" onAction="#disconnect" styleClass="secondary-button"/>
+        </HBox>
+        <Label fx:id="feedbackLabel" text="Enter your server details and credentials." wrapText="true" minHeight="58" maxWidth="Infinity" styleClass="feedback"/>
+    </VBox>
+</HBox>
