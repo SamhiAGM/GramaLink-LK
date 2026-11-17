@@ -1,0 +1,328 @@
+package lk.gramalink.client;
+
+import javafx.application.Platform;
+import javafx.beans.property.ReadOnlyStringWrapper;
+import javafx.fxml.FXML;
+import javafx.scene.control.*;
+import javafx.scene.layout.*;
+import javafx.scene.shape.Circle;
+import lk.gramalink.shared.*;
+
+import java.time.ZoneId;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+import java.util.concurrent.*;
+import java.util.function.Function;
+
+/** GN view state. Decisions and documents change only on authoritative decoded updates. */
+public final class GnDashboardController {
+    @FXML private Button uploadDocumentButton,downloadDocumentButton,performSelectedButton;
+    @FXML private ProgressBar fileProgress;
+    @FXML private Label fileProgressLabel;
+    @FXML private TabPane sections;
+    @FXML private VBox workspace;
+    @FXML private Button navDashboard, navRequests, navNotifications, navMessages;
+    @FXML private Label officerName, connectionLabel, feedback, assignedCount, notificationCount, assignedCaption, notificationCaption;
+    @FXML private Circle connectionDot;
+    @FXML private HBox activityRow;
+    @FXML private ProgressIndicator busyIndicator;
+    @FXML private Label activityLabel, detailsHeading, detailsDescription;
+    @FXML private TableView<GnData.RequestRow> assignedRequests;
+    @FXML private TableColumn<GnData.RequestRow, String> idColumn, citizenColumn, typeColumn, dateColumn, statusColumn, priorityColumn;
+    @FXML private TableView<GnData.Document> documents;
+    @FXML private TableColumn<GnData.Document, String> documentNameColumn, verificationColumn;
+    @FXML private ListView<String> history, notifications, recentNotifications, statusBreakdown, conversation;
+    @FXML private ComboBox<GnData.RequestRow> messageRequest;
+    @FXML private ComboBox<GnData.ActionKind> actionKind;
+    @FXML private TextArea actionNote, chatText;
+    @FXML private Button verifyButton, informationButton, forwardButton, rejectButton, sendButton, checkActionButton;
+    private final Map<String, GnData.Details> details = new HashMap<>();
+    private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm").withZone(ZoneId.of("Asia/Colombo"));
+    private boolean loading;
+    private long bindingEpoch;
+    private GnWorkspace gateway;
+    private Runnable returnToLogin;
+    private boolean active, busy, synchronizing;
+    private String renderedRequestId;
+
+    @FXML private void initialize() {
+        column(idColumn, GnData.RequestRow::id); column(citizenColumn, GnData.RequestRow::citizen);
+        column(typeColumn, GnData.RequestRow::type); column(statusColumn, GnData.RequestRow::status);
+        column(dateColumn, row -> DATE.format(row.submittedAt())); column(priorityColumn, GnData.RequestRow::priority);
+        column(documentNameColumn, GnData.Document::fileName); column(verificationColumn, GnData.Document::verificationStatus);
+        assignedRequests.setPlaceholder(new Label("Assigned requests have not been loaded from the server."));
+        documents.setPlaceholder(new Label("No supporting documents loaded for this request."));
+        history.setPlaceholder(new Label("No request history loaded."));
+        notifications.setPlaceholder(new Label("Officer notifications have not been loaded."));
+        recentNotifications.setItems(notifications.getItems());
+        recentNotifications.setPlaceholder(new Label("Officer notifications have not been loaded."));
+        statusBreakdown.setPlaceholder(new Label("Status counts will appear after assigned requests are loaded."));
+        conversation.setPlaceholder(new Label("Choose an assigned request to view its conversation."));
+        for (ListView<String> list : List.of(history, notifications, recentNotifications, conversation, statusBreakdown)) wrapCells(list);
+        messageRequest.setConverter(new javafx.util.StringConverter<>() {
+            public String toString(GnData.RequestRow row) { return row == null ? "" : row.id() + " | " + row.citizen(); }
+            public GnData.RequestRow fromString(String text) { throw new UnsupportedOperationException(); }
+        });
+        actionKind.getItems().setAll(GnData.ActionKind.VERIFY_DOCUMENT, GnData.ActionKind.REQUEST_INFORMATION,
+                GnData.ActionKind.FORWARD_TO_DS, GnData.ActionKind.REJECT_REQUEST);
+        actionKind.setValue(GnData.ActionKind.REQUEST_INFORMATION);
+        actionKind.valueProperty().addListener((observable, old, selected) -> refreshActions());
+        actionNote.textProperty().addListener((observable, old, text) -> refreshActions());
+        assignedRequests.getSelectionModel().selectedItemProperty().addListener((observable, old, selected) -> {
+            if (synchronizing) return;
+            synchronizing = true; messageRequest.getSelectionModel().select(selected); synchronizing = false;
+            renderSelected();
+        });
+        messageRequest.getSelectionModel().selectedItemProperty().addListener((observable, old, selected) -> {
+            if (synchronizing) return;
+            synchronizing = true;
+            if (selected == null) assignedRequests.getSelectionModel().clearSelection(); else assignedRequests.getSelectionModel().select(selected);
+            synchronizing = false; renderSelected();
+        });
+        documents.getSelectionModel().selectedItemProperty().addListener((observable, old, selected) -> refreshActions());
+        sections.getSelectionModel().selectedIndexProperty().addListener((observable, old, selected) -> highlight(selected.intValue()));
+        highlight(0);
+        activityRow.visibleProperty().bind(busyIndicator.visibleProperty());
+        activityRow.managedProperty().bind(activityRow.visibleProperty());
+        workspace.setDisable(true);
+    }
+
+    void attach(GnWorkspace gateway, Runnable returnToLogin) {
+        gateway.requireGnOfficer();
+        if (this.gateway != null) this.gateway.setListener(new GnGateway.Listener() { });
+        if (this.gateway != null && this.gateway != gateway) resetView();
+        final long epoch = ++bindingEpoch;
+        this.gateway = gateway; this.returnToLogin = returnToLogin; active = true;
+        officerName.setText(gateway.identity().orElseThrow().displayName());
+        setBusy(false); status(true); refreshActions();
+        gateway.setListener(new GnGateway.Listener() {
+            public void onLoading(boolean value){Platform.runLater(()->{if(bindingCurrent(epoch,gateway)){loading=value;setBusy(busy);}});}
+            public void onFileProgress(FileTransferProgress.Snapshot snapshot){ Platform.runLater(()->{
+                if(bindingCurrent(epoch,gateway)){fileProgress.setProgress(snapshot.fraction());fileProgressLabel.setText(snapshot.detail());}
+            }); }
+
+            public void onRecovery(ClientReliability.State state) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) recovery(state); }); }
+            public void onUpdate(GnData.Update update) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway) && gateway.isGnAuthorized()) apply(update); }); }
+            public void onStatus(NetworkClient.Status value) { Platform.runLater(() -> {
+                if (bindingCurrent(epoch, gateway)) status(value == NetworkClient.Status.CONNECTED && gateway.isGnAuthorized());
+            }); }
+            public void onError(String error) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) feedback.setText(error); }); }
+        });
+        if(gateway.supports(GnData.ActionKind.RECEIVE)) actionKind.getItems().setAll(GnData.ActionKind.RECEIVE,
+                GnData.ActionKind.REVIEW,GnData.ActionKind.VERIFY_REQUEST,GnData.ActionKind.REQUEST_INFORMATION,
+                GnData.ActionKind.FORWARD_TO_DS,GnData.ActionKind.REJECT_REQUEST);
+        gateway.refresh();
+    }
+    @FXML private void refreshFromServer() { if(gateway!=null) gateway.refresh(); }
+    @FXML private void showDashboard() { sections.getSelectionModel().select(0); }
+    @FXML private void showRequests() { sections.getSelectionModel().select(1); }
+    @FXML private void showNotifications() { sections.getSelectionModel().select(2); }
+    @FXML private void showMessages() { sections.getSelectionModel().select(3); }
+    private void highlight(int selected) {
+        List<Button> navigation = List.of(navDashboard, navRequests, navNotifications, navMessages);
+        for (int i = 0; i < navigation.size(); i++) {
+            navigation.get(i).getStyleClass().remove("nav-current");
+            if (selected == i) navigation.get(i).getStyleClass().add("nav-current");
+        }
+    }
+    private void resetView() {
+        details.clear(); assignedRequests.getItems().clear(); messageRequest.getItems().clear(); documents.getItems().clear();
+        history.getItems().clear(); conversation.getItems().clear(); notifications.getItems().clear(); statusBreakdown.getItems().clear();
+        actionNote.clear(); chatText.clear(); renderedRequestId = null;
+        assignedCount.setText("\u2014"); notificationCount.setText("\u2014");
+        assignedCaption.setText("Awaiting server data"); notificationCaption.setText("Awaiting server data");
+    }
+    private boolean bindingCurrent(long epoch, GnWorkspace source) {
+        return active && bindingEpoch == epoch && gateway == source;
+    }
+    private void recovery(ClientReliability.State state) {
+        if (state == ClientReliability.State.ONLINE && gateway.isGnAuthorized()) { status(true); return; }
+        status(false);
+        switch (state) {
+            case CONNECTING, RECONNECTING -> {
+                connectionLabel.setText(state == ClientReliability.State.CONNECTING ? "Connecting..." : "Reconnecting...");
+                connectionDot.setStyle("-fx-fill: #d59a22;");
+                feedback.setText("Connection recovery is in progress. Actions are locked; fresh server sign-in is required.");
+            }
+            case AUTHENTICATION_REQUIRED, ONLINE -> {
+                connectionLabel.setText("Connected - fresh sign-in required");
+                feedback.setText("The socket is connected. Return to sign in for fresh server authorization; previous data is not reloaded automatically.");
+            }
+            case OFFLINE -> connectionLabel.setText("Offline - return to sign in");
+        }
+    }
+    private void status(boolean online) {
+        connectionDot.setStyle("");
+        connectionLabel.setText(online ? "Connected" : "Disconnected - GN sign-in required");
+        connectionDot.getStyleClass().removeAll("online", "offline");
+        connectionDot.getStyleClass().add(online ? "online" : "offline");
+        workspace.setDisable(!online);
+        if (!online) { setBusy(false); feedback.setText("Officer authorization is unavailable. Actions are locked; return to sign in."); }
+    }
+    private void refreshActions() {
+        boolean fileReady=gateway!=null && gateway.supportsFiles() && !busy && assignedRequests.getSelectionModel().getSelectedItem()!=null;
+        uploadDocumentButton.setDisable(!fileReady);downloadDocumentButton.setDisable(!fileReady || documents.getSelectionModel().getSelectedItem()==null);
+        performSelectedButton.setDisable(!canPerform(actionKind.getValue()) || !selectedFieldsValid());
+
+        boolean assigned = gateway != null && gateway.isGnAuthorized() && assignedRequests.getSelectionModel().getSelectedItem() != null && !busy;
+        verifyButton.setDisable(!assigned || documents.getSelectionModel().getSelectedItem() == null || !gateway.supports(GnData.ActionKind.VERIFY_DOCUMENT));
+        informationButton.setDisable(!canPerform(GnData.ActionKind.REQUEST_INFORMATION));
+        forwardButton.setDisable(!canPerform(GnData.ActionKind.FORWARD_TO_DS));
+        rejectButton.setDisable(!canPerform(GnData.ActionKind.REJECT_REQUEST));
+        sendButton.setDisable(!assigned || !gateway.supports(GnData.ActionKind.CHAT));
+        checkActionButton.setDisable(!assigned);
+        assignedRequests.setDisable(busy); documents.setDisable(busy); messageRequest.setDisable(busy);
+        actionKind.setDisable(busy); actionNote.setDisable(busy); chatText.setDisable(busy);
+    }
+    private boolean canPerform(GnData.ActionKind kind) {
+        var row = assignedRequests.getSelectionModel().getSelectedItem();
+        return gateway != null && gateway.isGnAuthorized() && !busy && !loading && kind != null && row != null
+                && gateway.permits(kind, row);
+    }
+    private boolean selectedFieldsValid() {
+        if (actionKind.getValue() == null) return false;
+        try {
+            GnData.Action selected = action(actionKind.getValue());
+            return selected.note().length() <= 1000;
+        } catch (IllegalArgumentException exception) { return false; }
+    }
+    private GnData.Action action(GnData.ActionKind kind) {
+        if (kind == null) throw new IllegalArgumentException("Select an officer action first.");
+        GnData.RequestRow selected = assignedRequests.getSelectionModel().getSelectedItem();
+        GnData.Document document = documents.getSelectionModel().getSelectedItem();
+        return new GnData.Action(kind, selected == null ? null : selected.id(), document == null ? null : document.id(),
+                kind == GnData.ActionKind.CHAT ? chatText.getText() : actionNote.getText(), selected == null ? null : selected.version());
+    }
+    @FXML private void performSelectedAction() { if(actionKind.getValue()!=null) perform(actionKind.getValue()); }
+    @FXML private void checkAction() {
+        try {
+            gateway.requireGnOfficer();
+            GnData.Action selected = action(actionKind.getValue());
+            if (selected.note().length() > 1000) throw new IllegalArgumentException("Officer notes must contain at most 1000 characters.");
+            if (gateway.supports(selected.kind()) && !canPerform(selected.kind()))
+                throw new IllegalArgumentException("This action is unavailable for the current request status or version. Refresh the assigned request.");
+            feedback.setText("Action fields are valid. Nothing has been sent or changed.");
+        } catch (IllegalArgumentException | SecurityException error) { feedback.setText(error.getMessage()); }
+    }
+    @FXML private void verifyDocument() { perform(GnData.ActionKind.VERIFY_DOCUMENT); }
+    @FXML private void requestInformation() { perform(GnData.ActionKind.REQUEST_INFORMATION); }
+    @FXML private void forwardToDs() { perform(GnData.ActionKind.FORWARD_TO_DS); }
+    @FXML private void rejectRequest() { perform(GnData.ActionKind.REJECT_REQUEST); }
+    @FXML private void sendMessage() { perform(GnData.ActionKind.CHAT); }
+    private void perform(GnData.ActionKind kind) {
+        final long epoch = bindingEpoch; final GnWorkspace source = gateway;
+        try {
+            gateway.requireGnOfficer();
+            GnData.Action request = action(kind);
+            setBusy(true);
+            gateway.perform(request).whenComplete((reply, error) -> Platform.runLater(() -> {
+                if (!bindingCurrent(epoch, source)) return;
+                setBusy(false);
+                if (!source.isGnAuthorized()) { status(false); return; }
+                // Never mutate status, documents, history or chat based on a write/ACK alone.
+                feedback.setText(error != null ? errorMessage(error) : reply.type() == MessageType.ERROR
+                        ? LoginService.describe(reply) : "Server reply: " + reply.type() + ". Awaiting authoritative request data; no local status change applied.");
+            }));
+        } catch (IllegalArgumentException | SecurityException error) { setBusy(false); feedback.setText(error.getMessage()); }
+    }
+    private void setBusy(boolean value) {
+        busy = value; busyIndicator.setVisible(value || loading); activityLabel.setText(value ? "Waiting for the officer service…" : ""); refreshActions();
+    }
+
+    private void apply(GnData.Update update) {
+        if (update instanceof GnData.Requests data) {
+            String selectedId = Optional.ofNullable(assignedRequests.getSelectionModel().getSelectedItem()).map(GnData.RequestRow::id).orElse(null);
+            synchronizing = true;
+            assignedRequests.getItems().setAll(data.rows()); messageRequest.getItems().setAll(data.rows());
+            details.keySet().retainAll(data.rows().stream().map(GnData.RequestRow::id).toList());
+            GnData.RequestRow selected = data.rows().stream().filter(row -> Objects.equals(row.id(), selectedId)).findFirst().orElse(null);
+            assignedRequests.getSelectionModel().select(selected); messageRequest.getSelectionModel().select(selected);
+            synchronizing = false;
+            assignedRequests.setPlaceholder(new Label("No assigned requests returned by the server."));
+            assignedCount.setText(Integer.toString(data.rows().size())); assignedCaption.setText("Current assignments received from server");
+            Map<String, Long> counts = new TreeMap<>();
+            data.rows().forEach(row -> counts.merge(display(row.status()), 1L, Long::sum));
+            statusBreakdown.getItems().setAll(counts.entrySet().stream().map(entry -> entry.getKey() + "  ·  " + entry.getValue()).toList());
+            statusBreakdown.setPlaceholder(new Label("No assigned requests returned by the server."));
+            renderSelected();
+        } else if (update instanceof GnData.RequestDetails data) {
+            details.put(data.details().requestId(), data.details()); renderSelected();
+        } else if (update instanceof GnData.Notifications data) {
+            notifications.getItems().setAll(data.entries().stream().map(entry -> DATE.format(entry.at()) + "\n" + entry.text()
+                    + (entry.requestId() == null ? "" : "\nRequest " + entry.requestId())).toList());
+            notifications.setPlaceholder(new Label("No officer notifications returned by the server."));
+            recentNotifications.setPlaceholder(new Label("No officer notifications returned by the server."));
+            notificationCount.setText(Integer.toString(data.entries().size())); notificationCaption.setText("Notifications received from server");
+        }
+    }
+    private void renderSelected() {
+        GnData.RequestRow row = assignedRequests.getSelectionModel().getSelectedItem();
+        String selectedId = row == null ? null : row.id();
+        if (!Objects.equals(selectedId, renderedRequestId)) { actionNote.clear(); chatText.clear(); }
+        renderedRequestId = selectedId;
+        String documentId = Optional.ofNullable(documents.getSelectionModel().getSelectedItem()).map(GnData.Document::id).orElse(null);
+        documents.getItems().clear(); history.getItems().clear(); conversation.getItems().clear();
+        GnData.Details data = selectedId == null ? null : details.get(selectedId);
+        detailsHeading.setText(row == null ? "Select an assigned request" : row.id() + "  |  " + row.citizen());
+        detailsDescription.setText(data == null ? "Request details have not been loaded from the server." : data.description());
+        if (data != null) {
+            documents.getItems().setAll(data.documents());
+            data.documents().stream().filter(document -> Objects.equals(document.id(), documentId)).findFirst().ifPresent(document -> documents.getSelectionModel().select(document));
+            history.getItems().setAll(data.history().stream().map(entry -> DATE.format(entry.at()) + "  |  " + entry.status() + "\n" + entry.description()).toList());
+            conversation.getItems().setAll(data.messages().stream().map(entry -> DATE.format(entry.at()) + "  |  " + entry.sender() + "\n" + entry.text()).toList());
+        }
+        refreshActions();
+    }
+
+    @FXML private void uploadDocument(){
+        var row=assignedRequests.getSelectionModel().getSelectedItem();
+        if(row==null || !gateway.supportsFiles()){feedback.setText("Select a request with current server authorization.");return;}
+        var chooser=new javafx.stage.FileChooser();chooser.setTitle("Upload a plain PDF supporting document");
+        chooser.getExtensionFilters().add(new javafx.stage.FileChooser.ExtensionFilter("PDF documents","*.pdf"));
+        var file=chooser.showOpenDialog(assignedRequests.getScene().getWindow());if(file==null)return;
+        fileOperation(gateway.upload(row.id(),file.toPath()),true);
+    }
+    @FXML private void downloadDocument(){
+        var row=assignedRequests.getSelectionModel().getSelectedItem();var document=documents.getSelectionModel().getSelectedItem();
+        if(row==null || document==null || !gateway.supportsFiles()){feedback.setText("Select an authorized request and document.");return;}
+        var chooser=new javafx.stage.FileChooser();chooser.setTitle("Save verified download to a new file");chooser.setInitialFileName(document.fileName());
+        var file=chooser.showSaveDialog(assignedRequests.getScene().getWindow());if(file==null)return;
+        fileOperation(gateway.download(row.id(),document.id(),file.toPath()),false);
+    }
+    private void fileOperation(java.util.concurrent.CompletableFuture<?> future,boolean upload){
+        long epoch=bindingEpoch;var source=gateway;setBusy(true);
+        future.whenComplete((result,error)->Platform.runLater(()->{
+            if(!bindingCurrent(epoch,source))return;setBusy(false);
+            if(!source.isGnAuthorized()){status(false);return;}
+            String detail;
+            if(error!=null){Throwable cause=error;while(cause instanceof java.util.concurrent.CompletionException && cause.getCause()!=null)cause=cause.getCause();detail=cause.getMessage();}
+            else detail=upload ? "STORED: backend confirmed document "+result : "Download checksum verified and saved: "+result;
+            feedback.setText(detail);fileProgressLabel.setText(detail);
+        }));
+    }
+    @FXML private void signOut() {
+        bindingEpoch++; active = false; workspace.setDisable(true); gateway.setListener(new GnGateway.Listener() { });
+        gateway.disconnect().whenComplete((ignored, error) -> Platform.runLater(returnToLogin));
+    }
+    static String errorMessage(Throwable error) {
+        while (error instanceof CompletionException && error.getCause() != null) error = error.getCause();
+        if (error instanceof TimeoutException) return "The server did not reply in time. Request status is unconfirmed; check authoritative data before retrying.";
+        if (error instanceof UnsupportedOperationException) return "This officer action is not available on the server yet. No local status change was applied.";
+        if (error instanceof SecurityException) return "GN Officer authorization expired. Return to sign in.";
+        if (error instanceof IllegalArgumentException) return error.getMessage();
+        return "The officer operation could not be completed. Check the connection; request status remains unconfirmed.";
+    }
+    private static String display(String value) { return value == null || value.isBlank() ? "Not supplied" : value; }
+    private static <T> void column(TableColumn<T, String> column, Function<T, String> value) {
+        column.setCellValueFactory(cell -> new ReadOnlyStringWrapper(display(value.apply(cell.getValue()))));
+    }
+    private static void wrapCells(ListView<String> list) {
+        list.setCellFactory(view -> new ListCell<>() {
+            private final Label label = new Label();
+            { label.setWrapText(true); label.maxWidthProperty().bind(list.widthProperty().subtract(36)); }
+            @Override protected void updateItem(String item, boolean empty) {
+                super.updateItem(item, empty); setText(null); label.setText(empty ? null : item); setGraphic(empty ? null : label);
+            }
+        });
+    }
+}

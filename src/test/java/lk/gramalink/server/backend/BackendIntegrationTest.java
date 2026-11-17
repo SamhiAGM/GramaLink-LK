@@ -73,6 +73,32 @@ public class BackendIntegrationTest {
         code(ServiceException.Code.FORBIDDEN,()->admin.users(CITIZEN,0));
         assertTrue(db.transaction(c -> Sql.rows(c,"SELECT * FROM audit_logs WHERE outcome='FORBIDDEN'").size())>0);
     }
+    @Test void tcpCreationRejectsWrongDivisionAndOfficerImpersonationBeforePersistence() throws Exception {
+        var citizen = connect("citizen.demo");
+        var payload = JsonNodeFactory.instance.objectNode().put("type", "INCOME")
+                .put("title", "Need a Income Certificate")
+                .put("description", "I need a verified income certificate to be submitted to university")
+                .put("division", "Philledeniya");
+        var denied = citizen.call(MessageType.CREATE_REQUEST, payload);
+        assertEquals(MessageType.ERROR, denied.type());
+        assertEquals("FORBIDDEN", denied.payload().path("code").asText());
+        assertTrue(db.transaction(c -> Sql.rows(c, "SELECT id FROM requests")).isEmpty());
+        assertTrue(db.transaction(c -> Sql.rows(c, "SELECT id FROM request_history")).isEmpty());
+        assertEquals(1, db.transaction(c -> Sql.rows(c, "SELECT id FROM audit_logs WHERE action='CREATE_REQUEST' AND outcome='FORBIDDEN'")).size());
+        var officer = connect("gn.demo");
+        payload.put("division", "DEMO-A").put("role", "CITIZEN").put("userId", CITIZEN.userId().toString());
+        assertEquals("FORBIDDEN", officer.call(MessageType.CREATE_REQUEST, payload).payload().path("code").asText());
+        assertTrue(db.transaction(c -> Sql.rows(c, "SELECT id FROM requests")).isEmpty());
+        payload.remove(List.of("role", "userId"));
+        var created = citizen.call(MessageType.CREATE_REQUEST, payload);
+        assertEquals(MessageType.ACK, created.type());
+        assertEquals("CREATE_REQUEST", created.payload().path("operation").asText());
+        UUID id = UUID.fromString(created.payload().path("data").path("id").asText());
+        assertEquals(CITIZEN.userId(), requests.detail(CITIZEN, id).citizenId());
+        assertEquals(1, requests.history(CITIZEN, id).size());
+        assertTrue(db.transaction(c -> Sql.rows(c, "SELECT id FROM requests WHERE id=?", id)).size() == 1);
+    }
+
     @Test void completeWorkflowHistoryAndNotificationsAreDurable() {
         var r=create(); r=change(GN,r,Action.RECEIVE); r=change(GN,r,Action.REVIEW); r=change(GN,r,Action.VERIFY);
         r=change(GN,r,Action.FORWARD); r=change(DS,r,Action.APPROVE);
@@ -168,6 +194,28 @@ public class BackendIntegrationTest {
         Files.write(destination,new byte[data.length]); var corrupt=files.authorize(session,request);
         assertThrows(IOException.class,()->files.openDownload(session,corrupt)); files.abort(session,corrupt);
     }
+    @Test void closedRequestsRejectNewUploadsButKeepExistingDownloadsAndSession() throws Exception {
+        var session=session("citizen.demo");byte[] data=pdf();
+        var wire=connect("citizen.demo");
+        for(boolean approve:List.of(true,false)) {
+            var r=create();var grant=files.authorize(session,metadata(r.id(),"evidence.pdf",data));
+            files.receiveChunk(session,grant,new FileChunk(grant.transferId(),0,true,data));
+            r=change(GN,r,Action.RECEIVE);
+            if(approve) {
+                r=change(GN,r,Action.REVIEW);r=change(GN,r,Action.VERIFY);r=change(GN,r,Action.FORWARD);r=change(DS,r,Action.APPROVE);
+            } else r=change(GN,r,Action.REJECT);
+            UUID requestId=r.id();
+            code(ServiceException.Code.FORBIDDEN,()->files.authorize(session,metadata(requestId,"another.pdf",data)));
+            assertEquals("FILE_TRANSFER_REJECTED",wire.call(MessageType.FILE_META,metadata(requestId,"another.pdf",data).payload()).payload().path("code").asText());
+            assertEquals(MessageType.ACK,wire.call(MessageType.ME,JsonNodeFactory.instance.objectNode()).type(),"Rejected FILE_META must leave the authenticated socket usable");
+            assertSame(session,sessions.findSession(session.connection()).orElseThrow());
+            assertEquals(1,files.list(CITIZEN,requestId).size());
+            var download=files.authorize(session,new Message(MessageType.FILE_META,JsonNodeFactory.instance.objectNode()
+                    .put("direction","DOWNLOAD").put("documentId",grant.transferId().toString())));
+            try(var input=files.openDownload(session,download)){assertArrayEquals(data,input.readAllBytes());}
+        }
+    }
+
     @Test void rejectsForbiddenOversizeTraversalMalformedPdfAndChecksumMismatch() throws Exception {
         var r=create(); var session=session("citizen.demo"); byte[] pdf=pdf();
         for(String name:List.of("../demo.pdf","C:\\demo.pdf","demo.exe","bad..pdf"))

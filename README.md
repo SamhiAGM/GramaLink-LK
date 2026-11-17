@@ -1,4 +1,15 @@
 # GramaLink-LK
+
+The JavaFX production adapters now consume the merged PostgreSQL backend. See
+[the current client integration checklist](docs/u07-u08-client-integration.md)
+for the feature matrix, protocol mapping, exact Windows CMD setup/test/startup
+commands, current test evidence, remaining owner dependencies and evaluation
+demonstration sequence. The older dashboard preview reports are retained as
+historical notes; previews are not evidence of production integration.
+
+Before `mvn clean verify`, stop the GramaLink server with **Ctrl+C** and close
+the client. Windows cannot replace the application JAR while it is executing.
+
 Real-time client-server coordination system connecting Citizens, Grama Niladhari Officers and Divisional Secretariat Officers using Java, JavaFX, TCP Socket Programming and PostgreSQL, with request tracking, live notifications, file transfer and role-based access.
 
 ## Backend module (Shadhir)

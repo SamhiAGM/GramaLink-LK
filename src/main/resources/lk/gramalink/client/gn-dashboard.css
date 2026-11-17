@@ -1,0 +1,4 @@
+/* Base theme is citizen-dashboard.css; GN-specific emphasis stays here. */
+.danger-button { -fx-background-color: #f9e4e4; -fx-text-fill: #a53131; }
+.danger-button:hover { -fx-background-color: #f1cccc; }
+.flow-pane { -fx-padding: 4 0; }
