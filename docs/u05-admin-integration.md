@@ -1,3 +1,13 @@
+# Current production integration — 13 November 2026
+
+The production Admin gateway now loads ME, paged LIST_USERS/LIST_OFFICES, GET_STATISTICS and cursor-paged GET_AUDIT. Supported submissions are CREATE_USER (password and division included), SET_USER_ACTIVE, CREATE_OFFICE (DS parent required for GN), and RENAME_OFFICE. Unsupported general user editing and office archiving remain unavailable. Roles and office kinds come from the documented backend contract, not an invented catalogue command. Real records have no demo flag. The backend supplies only an online connection count, no per-client session list, office total or statistics timestamp; those unavailable values remain unknown.
+
+See [the current verification checklist](u07-u08-client-integration.md) for test results, startup and remaining limits.
+
+The following original implementation report is historical. Statements about missing backend authentication/contracts below describe the earlier preview phase and are superseded by this section and backend-contract.md.
+
+---
+
 # U05 Administrator dashboard
 
 ## UI-ready components

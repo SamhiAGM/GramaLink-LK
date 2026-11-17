@@ -14,6 +14,9 @@ final class OfflineAdminWorkspace implements AdminWorkspace, AutoCloseable {
     static final AdminData.Choice DS = new AdminData.Choice("PREVIEW_KIND_DS", "DS office (fictional)");
     private AdminGateway.Listener listener = new AdminGateway.Listener() { };
     boolean available = true, exerciseActions;
+    boolean backendContract;
+    public boolean usesBackendContract() { return backendContract; }
+    public void validateCommand(AdminData.Command command) { if(backendContract) AdminProtocol.productionBackend().encode(command); }
     int operations;
     AdminData.Command lastCommand;
     CompletableFuture<Message> nextReply;
@@ -21,7 +24,7 @@ final class OfflineAdminWorkspace implements AdminWorkspace, AutoCloseable {
     public void requireAdministrator() { if (!available) throw new SecurityException("Offline fixture closed"); }
     public boolean isAdministratorAuthorized() { return available; }
     public Optional<AdminData.Identity> identity() { return Optional.of(new AdminData.Identity("PREVIEW-NOT-AN-ADMIN-SESSION", "Fictional Administrator (offline preview)")); }
-    public boolean supports(AdminData.Operation operation) { return available && exerciseActions; }
+    public boolean supports(AdminData.Operation operation) { return available && exerciseActions && (!backendContract || AdminProtocol.productionBackend().supports(operation)); }
     public void setListener(AdminGateway.Listener listener) { this.listener = listener; }
     public CompletableFuture<Message> perform(AdminData.Command command) {
         operations++; lastCommand = command;

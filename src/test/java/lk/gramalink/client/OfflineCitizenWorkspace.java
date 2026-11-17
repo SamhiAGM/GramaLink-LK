@@ -20,6 +20,11 @@ final class OfflineCitizenWorkspace implements CitizenWorkspace, AutoCloseable {
     private CitizenGateway.Listener listener = new CitizenGateway.Listener() { };
     boolean available = true;
     boolean exerciseAcknowledgement;
+    boolean registeredDivision;
+    boolean filesAvailable;
+    public boolean supportsFiles() { return available && filesAvailable; }
+    public boolean usesRegisteredDivision() { return registeredDivision; }
+    void refreshError(String message) { listener.onError(message); }
     int submissions;
     int sends;
     CompletableFuture<Message> nextReply;

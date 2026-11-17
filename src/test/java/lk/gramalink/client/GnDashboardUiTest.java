@@ -39,6 +39,74 @@ class GnDashboardUiTest {
         fx(() -> { ui.<TableView<GnData.RequestRow>>node("assignedRequests").getSelectionModel().selectFirst(); return null; });
     }
 
+    @Test void selectingReceiveRecalculatesPerformButtonAndWaitsForServer() throws Exception {
+        try (Ui ui = load(false)) {
+            ui.fixture.exerciseActions = true;
+            ui.fixture.nextReply = new CompletableFuture<>();
+            fx(() -> { ui.controller().attach(ui.fixture, () -> { }); return null; });
+            ui.fixture.emit(new GnData.Requests(List.of(new GnData.RequestRow("assigned-request", "Citizen", "INCOME",
+                    Instant.now(), "SUBMITTED", null, 0L))));
+            fx(() -> {
+                ui.<ComboBox<GnData.ActionKind>>node("actionKind").setValue(null);
+                ui.<TableView<GnData.RequestRow>>node("assignedRequests").getSelectionModel().selectFirst();
+                assertTrue(ui.<Button>node("performSelectedButton").isDisabled());
+                ui.<ComboBox<GnData.ActionKind>>node("actionKind").setValue(GnData.ActionKind.RECEIVE);
+                ui.<Button>node("checkActionButton").fire();
+                assertFalse(ui.<Button>node("performSelectedButton").isDisabled(), "Selecting a supported action must recalculate enablement");
+                ui.<Button>node("performSelectedButton").fire();
+                assertEquals(1, ui.fixture.operations);
+                assertEquals(GnData.ActionKind.RECEIVE, ui.fixture.lastAction.kind());
+                assertEquals(0L, ui.fixture.lastAction.expectedVersion());
+                assertTrue(ui.<Button>node("performSelectedButton").isDisabled());
+                assertEquals("SUBMITTED", ui.<TableView<GnData.RequestRow>>node("assignedRequests").getItems().getFirst().status());
+                return null;
+            });
+            ui.fixture.nextReply.complete(new Message(MessageType.ACK, JsonNodeFactory.instance.objectNode()));
+            fx(() -> {
+                assertEquals("SUBMITTED", ui.<TableView<GnData.RequestRow>>node("assignedRequests").getItems().getFirst().status(), "ACK alone cannot fabricate a new status");
+                return null;
+            });
+        }
+    }
+
+    @Test void invalidTransitionsMissingVersionRefreshAndDisconnectKeepPerformDisabled() throws Exception {
+        try (Ui ui = load(false)) {
+            ui.fixture.exerciseActions = true; ui.fixture.productionRules = true;
+            fx(() -> { ui.controller().attach(ui.fixture, () -> { }); return null; });
+            ui.fixture.emit(new GnData.Requests(List.of(new GnData.RequestRow("assigned", "Citizen", "INCOME", Instant.EPOCH, "SUBMITTED", null, 0L))));
+            fx(() -> {
+                var kind = ui.<ComboBox<GnData.ActionKind>>node("actionKind");
+                var button = ui.<Button>node("performSelectedButton");
+                kind.setValue(GnData.ActionKind.RECEIVE);
+                assertTrue(button.isDisabled(), "Selection is required");
+                ui.<TableView<GnData.RequestRow>>node("assignedRequests").getSelectionModel().selectFirst();
+                assertFalse(button.isDisabled());
+                for (var invalid : List.of(GnData.ActionKind.REVIEW, GnData.ActionKind.VERIFY_REQUEST, GnData.ActionKind.FORWARD_TO_DS, GnData.ActionKind.REJECT_REQUEST)) {
+                    kind.setValue(invalid); assertTrue(button.isDisabled(), invalid.toString());
+                }
+                kind.setValue(GnData.ActionKind.RECEIVE); return null;
+            });
+            ui.fixture.loading(true);
+            fx(() -> { assertTrue(ui.<Button>node("performSelectedButton").isDisabled()); return null; });
+            ui.fixture.loading(false);
+            fx(() -> { assertFalse(ui.<Button>node("performSelectedButton").isDisabled()); return null; });
+            ui.fixture.emit(new GnData.Requests(List.of(new GnData.RequestRow("assigned", "Citizen", "INCOME", Instant.EPOCH, "SUBMITTED", null, null))));
+            fx(() -> { assertTrue(ui.<Button>node("performSelectedButton").isDisabled(), "Missing server version"); return null; });
+            ui.fixture.emit(new GnData.Requests(List.of(new GnData.RequestRow("assigned", "Citizen", "INCOME", Instant.EPOCH, "RECEIVED_BY_GN", null, 1L))));
+            fx(() -> {
+                assertTrue(ui.<Button>node("performSelectedButton").isDisabled(), "Already received");
+                ui.<ComboBox<GnData.ActionKind>>node("actionKind").setValue(GnData.ActionKind.REQUEST_INFORMATION);
+                assertTrue(ui.<Button>node("performSelectedButton").isDisabled(), "Reason is required");
+                ui.<TextArea>node("actionNote").setText("Please supply evidence");
+                assertFalse(ui.<Button>node("performSelectedButton").isDisabled(), "Note edits also refresh enablement");
+                return null;
+            });
+            ui.fixture.disconnected();
+            fx(() -> { assertTrue(ui.<Button>node("performSelectedButton").isDisabled()); return null; });
+            assertEquals(0, ui.fixture.operations);
+        }
+    }
+
     @Test void fxmlStartsLockedAndAllNavigationUsesSameTheme() throws Exception {
         try (Ui ui = load(false)) {
             fx(() -> {

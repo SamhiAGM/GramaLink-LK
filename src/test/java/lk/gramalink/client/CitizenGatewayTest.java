@@ -22,7 +22,11 @@ class CitizenGatewayTest {
 
     /** Test-only adapter fixtures exercise client boundaries, not credential verification or a proposed wire schema. */
     private static CitizenProtocol fixture() {
+        return fixture(false);
+    }
+    private static CitizenProtocol fixture(boolean backendQueries) {
         return new CitizenProtocol() {
+            public boolean loadsBackend() { return backendQueries; }
             public Optional<CitizenData.Identity> citizenAuthorization(Message reply) {
                 return Optional.of(new CitizenData.Identity("fixture-user", "Fixture Citizen"));
             }
@@ -47,6 +51,49 @@ class CitizenGatewayTest {
             assertThrows(SecurityException.class, () -> new CitizenDashboardController().attach(gateway, () -> { }));
             failure(SecurityException.class, gateway.createRequest(draft()));
             failure(SecurityException.class, gateway.sendMessage("request", "hello"));
+        }
+    }
+
+    @Test void successfulCreationFutureSurvivesSubsequentRefreshDenial() throws Exception {
+        try (ServerSocket listener = new ServerSocket(0);
+             NetworkClient client = new NetworkClient("127.0.0.1", listener.getLocalPort());
+             CitizenGateway gateway = new CitizenGateway(client, fixture(true), Runnable::run)) {
+            listener.setSoTimeout(3000);
+            client.connect();
+            gateway.connectionStatus(NetworkClient.Status.CONNECTED);
+            gateway.acceptLoginReply(message(MessageType.LOGIN_OK));
+            var errors = new LinkedBlockingQueue<String>();
+            gateway.setListener(new CitizenGateway.Listener() { public void onError(String error) { errors.add(error); } });
+            try (Socket peer = listener.accept()) {
+                peer.setSoTimeout(3000);
+                var input = new DataInputStream(peer.getInputStream());
+                var output = new DataOutputStream(peer.getOutputStream());
+                var creation = gateway.createRequest(draft());
+                Message sent = JsonUtil.readMessage(input);
+                String id = UUID.randomUUID().toString();
+                var payload = JsonNodeFactory.instance.objectNode().put("operation", "CREATE_REQUEST");
+                payload.putObject("data").put("id", id);
+                JsonUtil.writeMessage(output, new Message(MessageType.ACK, sent.correlationId(), null, payload));
+                Message refresh = JsonUtil.readMessage(input);
+                assertEquals(MessageType.ME, refresh.type());
+                JsonUtil.writeMessage(output, new Message(MessageType.ERROR, refresh.correlationId(), null,
+                        JsonNodeFactory.instance.objectNode().put("code", "FORBIDDEN").put("message", "Denied refresh")));
+                assertTrue(Objects.requireNonNull(errors.poll(3, TimeUnit.SECONDS)).startsWith("Refresh failed: FORBIDDEN"));
+                assertEquals(id, creation.get(3, TimeUnit.SECONDS).payload().path("data").path("id").asText());
+                assertEquals(MessageType.ACK, creation.get().type());
+            }
+        }
+    }
+
+    @Test void correlatedCommandErrorsAreNotRebroadcastAsRefreshFailures() {
+        try (NetworkClient client = new NetworkClient(); CitizenGateway gateway = new CitizenGateway(client, fixture(), Runnable::run)) {
+            gateway.connectionStatus(NetworkClient.Status.CONNECTED);
+            gateway.acceptLoginReply(message(MessageType.LOGIN_OK));
+            var errors = new ArrayList<String>();
+            gateway.setListener(new CitizenGateway.Listener() { public void onError(String error) { errors.add(error); } });
+            gateway.incoming(new Message(MessageType.ERROR, "create-1", null,
+                    JsonNodeFactory.instance.objectNode().put("code", "FORBIDDEN").put("message", "This action is not permitted.")));
+            assertTrue(errors.isEmpty(), "The matched request future owns the command error");
         }
     }
 

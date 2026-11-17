@@ -27,14 +27,17 @@ public final class AdminData {
         public StatusCount { status = required(status, "Backend status required."); if (count < 0) throw new IllegalArgumentException("Counts cannot be negative."); }
     }
     public record AuditEntry(Instant at, String user, String activity, String target, String outcome) { }
-    public record UserDraft(String username, String displayName, Choice role, String officeId) {
+    public record UserDraft(String username, String displayName, Choice role, String officeId, String password, String division) {
+        public UserDraft(String username, String displayName, Choice role, String officeId) { this(username,displayName,role,officeId,null,null); }
         public UserDraft {
             username = required(username, "Enter a demo username."); displayName = required(displayName, "Enter a display name.");
             if (role == null) throw new IllegalArgumentException("Select a role supplied by the server catalogue.");
             officeId = officeId == null || officeId.isBlank() ? null : officeId.strip();
         }
+        @Override public String toString(){ return "UserDraft[username="+username+", password=<redacted>]"; }
     }
-    public record OfficeDraft(String name, Choice kind, String area) {
+    public record OfficeDraft(String name, Choice kind, String area, String parentId) {
+        public OfficeDraft(String name, Choice kind, String area) { this(name,kind,area,null); }
         public OfficeDraft {
             name = required(name, "Enter an office name.");
             if (kind == null) throw new IllegalArgumentException("Select an office type supplied by the server catalogue.");
@@ -43,11 +46,11 @@ public final class AdminData {
     }
     public enum Operation {
         CREATE_DEMO_USER("Create demo user"), UPDATE_DEMO_USER("Update selected demo user"), DISABLE_DEMO_USER("Disable selected demo user"),
-        CREATE_DEMO_OFFICE("Create demo office"), UPDATE_DEMO_OFFICE("Update selected demo office"), ARCHIVE_DEMO_OFFICE("Archive selected demo office");
+        CREATE_DEMO_OFFICE("Create office"), UPDATE_DEMO_OFFICE("Rename selected office"), ARCHIVE_DEMO_OFFICE("Archive selected office (unsupported)"), ENABLE_USER("Activate selected user");
         private final String label;
         Operation(String label) { this.label = label; }
         @Override public String toString() { return label; }
-        public boolean userOperation() { return ordinal() <= DISABLE_DEMO_USER.ordinal(); }
+        public boolean userOperation() { return this==ENABLE_USER || ordinal() <= DISABLE_DEMO_USER.ordinal(); }
         public boolean create() { return this == CREATE_DEMO_USER || this == CREATE_DEMO_OFFICE; }
     }
     public record Command(Operation operation, String targetId, UserDraft user, OfficeDraft office, String reason) {
@@ -56,7 +59,7 @@ public final class AdminData {
             if (!operation.create()) targetId = required(targetId, "Select a server-identified demo record first.");
             if (operation == Operation.CREATE_DEMO_USER || operation == Operation.UPDATE_DEMO_USER) Objects.requireNonNull(user, "Demo user fields required.");
             if (operation == Operation.CREATE_DEMO_OFFICE || operation == Operation.UPDATE_DEMO_OFFICE) Objects.requireNonNull(office, "Office fields required.");
-            if (operation == Operation.DISABLE_DEMO_USER || operation == Operation.ARCHIVE_DEMO_OFFICE)
+            if (operation == Operation.ARCHIVE_DEMO_OFFICE)
                 reason = required(reason, "Enter a reason for disabling or archiving the demo record.");
         }
     }

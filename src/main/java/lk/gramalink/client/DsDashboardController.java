@@ -17,6 +17,9 @@ import java.util.function.Function;
 
 /** DS controls only. Server events, not action replies, replace decision/status data. */
 public final class DsDashboardController {
+    @FXML private Button uploadDocumentButton,downloadDocumentButton;
+    @FXML private ProgressBar fileProgress;
+    @FXML private Label fileProgressLabel;
     @FXML private TabPane sections;
     @FXML private VBox workspace;
     @FXML private Button navDashboard, navRequests, navNotifications, navChat;
@@ -37,6 +40,7 @@ public final class DsDashboardController {
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm").withZone(ZoneId.of("Asia/Colombo"));
     private final Map<String, DsData.Details> details = new HashMap<>();
     private final Set<String> refreshRequired = new HashSet<>();
+    private boolean loading;
     private long bindingEpoch;
     private DsWorkspace gateway;
     private Runnable returnToLogin;
@@ -76,6 +80,7 @@ public final class DsDashboardController {
         sections.getSelectionModel().selectedIndexProperty().addListener((observable, old, selected) -> highlight(selected.intValue()));
         highlight(0);
         activityRow.visibleProperty().bind(busyIndicator.visibleProperty()); activityRow.managedProperty().bind(activityRow.visibleProperty());
+        documents.getSelectionModel().selectedItemProperty().addListener((o,old,value)->refreshActions());
         workspace.setDisable(true);
     }
     void attach(DsWorkspace gateway, Runnable returnToLogin) {
@@ -85,12 +90,19 @@ public final class DsDashboardController {
         final long epoch = ++bindingEpoch; this.gateway = gateway; this.returnToLogin = returnToLogin; active = true;
         officerName.setText(gateway.identity().orElseThrow().displayName()); setBusy(false); status(true); refreshActions();
         gateway.setListener(new DsGateway.Listener() {
+            public void onLoading(boolean value){Platform.runLater(()->{if(bindingCurrent(epoch,gateway)){loading=value;setBusy(busy);}});}
+            public void onFileProgress(FileTransferProgress.Snapshot snapshot){ Platform.runLater(()->{
+                if(bindingCurrent(epoch,gateway)){fileProgress.setProgress(snapshot.fraction());fileProgressLabel.setText(snapshot.detail());}
+            }); }
+
             public void onRecovery(ClientReliability.State state) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) recovery(state); }); }
             public void onUpdate(DsData.Update update) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway) && gateway.isDsAuthorized()) apply(update); }); }
             public void onStatus(NetworkClient.Status value) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) status(value == NetworkClient.Status.CONNECTED && gateway.isDsAuthorized()); }); }
             public void onError(String error) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) feedback.setText(error); }); }
         });
+        gateway.refresh();
     }
+    @FXML private void refreshFromServer() { if(gateway!=null) gateway.refresh(); }
     @FXML private void showDashboard() { sections.getSelectionModel().select(0); }
     @FXML private void showRequests() { sections.getSelectionModel().select(1); }
     @FXML private void showNotifications() { sections.getSelectionModel().select(2); }
@@ -136,6 +148,9 @@ public final class DsDashboardController {
         return selected && gateway.supports(kind) && (!gateway.requiresVersion(kind) || row.version() != null);
     }
     private void refreshActions() {
+        boolean fileReady=gateway!=null && gateway.supportsFiles() && !busy && forwardedRequests.getSelectionModel().getSelectedItem()!=null;
+        uploadDocumentButton.setDisable(!fileReady);downloadDocumentButton.setDisable(!fileReady || documents.getSelectionModel().getSelectedItem()==null);
+
         DsData.RequestRow row = forwardedRequests.getSelectionModel().getSelectedItem();
         boolean selected = gateway != null && gateway.isDsAuthorized() && row != null && !busy;
         DsData.Details current = row == null ? null : currentDetails(row);
@@ -183,7 +198,7 @@ public final class DsDashboardController {
             }));
         } catch (IllegalArgumentException | SecurityException error) { setBusy(false); feedback.setText(error.getMessage()); }
     }
-    private void setBusy(boolean value) { busy = value; busyIndicator.setVisible(value); activityLabel.setText(value ? "Waiting for the DS service…" : ""); refreshActions(); }
+    private void setBusy(boolean value) { busy = value; busyIndicator.setVisible(value || loading); activityLabel.setText(value ? "Waiting for the DS service…" : ""); refreshActions(); }
 
     private void apply(DsData.Update update) {
         if (update instanceof DsData.Requests snapshot) {
@@ -240,6 +255,33 @@ public final class DsDashboardController {
             if (data != null) for (DsData.History item : data.history()) entries.add(new Activity(item.at(), DATE.format(item.at()) + " | " + row.id() + "\n" + item.status() + " - " + item.description()));
         }
         recentActivity.getItems().setAll(entries.stream().sorted(Comparator.comparing(Activity::at).reversed()).map(Activity::text).toList());
+    }
+
+    @FXML private void uploadDocument(){
+        var row=forwardedRequests.getSelectionModel().getSelectedItem();
+        if(row==null || !gateway.supportsFiles()){feedback.setText("Select a request with current server authorization.");return;}
+        var chooser=new javafx.stage.FileChooser();chooser.setTitle("Upload a plain PDF supporting document");
+        chooser.getExtensionFilters().add(new javafx.stage.FileChooser.ExtensionFilter("PDF documents","*.pdf"));
+        var file=chooser.showOpenDialog(forwardedRequests.getScene().getWindow());if(file==null)return;
+        fileOperation(gateway.upload(row.id(),file.toPath()),true);
+    }
+    @FXML private void downloadDocument(){
+        var row=forwardedRequests.getSelectionModel().getSelectedItem();var document=documents.getSelectionModel().getSelectedItem();
+        if(row==null || document==null || !gateway.supportsFiles()){feedback.setText("Select an authorized request and document.");return;}
+        var chooser=new javafx.stage.FileChooser();chooser.setTitle("Save verified download to a new file");chooser.setInitialFileName(document.fileName());
+        var file=chooser.showSaveDialog(forwardedRequests.getScene().getWindow());if(file==null)return;
+        fileOperation(gateway.download(row.id(),document.id(),file.toPath()),false);
+    }
+    private void fileOperation(java.util.concurrent.CompletableFuture<?> future,boolean upload){
+        long epoch=bindingEpoch;var source=gateway;setBusy(true);
+        future.whenComplete((result,error)->Platform.runLater(()->{
+            if(!bindingCurrent(epoch,source))return;setBusy(false);
+            if(!source.isDsAuthorized()){status(false);return;}
+            String detail;
+            if(error!=null){Throwable cause=error;while(cause instanceof java.util.concurrent.CompletionException && cause.getCause()!=null)cause=cause.getCause();detail=cause.getMessage();}
+            else detail=upload ? "STORED: backend confirmed document "+result : "Download checksum verified and saved: "+result;
+            feedback.setText(detail);fileProgressLabel.setText(detail);
+        }));
     }
     @FXML private void signOut() {
         bindingEpoch++; active = false; workspace.setDisable(true); gateway.setListener(new DsGateway.Listener() { });

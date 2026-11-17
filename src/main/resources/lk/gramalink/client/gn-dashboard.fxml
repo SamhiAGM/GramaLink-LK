@@ -10,7 +10,8 @@
             <Label text="GramaLink LK" styleClass="brand-name"/>
             <Label text="GN OFFICER WORKSPACE" styleClass="sidebar-caption"/>
             <Separator/>
-            <Button fx:id="navDashboard" text="Dashboard" onAction="#showDashboard" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button text="Refresh from server" onAction="#refreshFromServer"/>
+<Button fx:id="navDashboard" text="Dashboard" onAction="#showDashboard" maxWidth="Infinity" styleClass="nav-button"/>
             <Button fx:id="navRequests" text="Assigned Requests" onAction="#showRequests" maxWidth="Infinity" styleClass="nav-button"/>
             <Button fx:id="navNotifications" text="Notifications" onAction="#showNotifications" maxWidth="Infinity" styleClass="nav-button"/>
             <Button fx:id="navMessages" text="Request Messages" onAction="#showMessages" maxWidth="Infinity" styleClass="nav-button"/>
@@ -30,7 +31,7 @@
                 <Circle fx:id="connectionDot" radius="5" styleClass="offline"/>
                 <Label fx:id="connectionLabel" text="Not connected"/>
             </HBox>
-            <Label fx:id="feedback" text="Officer actions are awaiting server support. Request and document statuses only change when confirmed by authoritative server updates."
+            <Label fx:id="feedback" text="Request states change only after backend confirmation. Verify request is a workflow action; document-ID verification is unsupported."
                    wrapText="true" maxWidth="Infinity" styleClass="notice"/>
             <HBox fx:id="activityRow" spacing="10" alignment="CENTER_LEFT">
                 <ProgressIndicator fx:id="busyIndicator" visible="false" prefWidth="20" prefHeight="20"/>
@@ -90,7 +91,9 @@
                                     <HBox spacing="16">
                                         <VBox spacing="10" HBox.hgrow="ALWAYS">
                                             <Label text="Supporting documents" styleClass="subheading"/>
-                                            <TableView fx:id="documents" prefHeight="180">
+                                            <HBox spacing="10"><Button fx:id="uploadDocumentButton" text="Upload PDF" onAction="#uploadDocument"/><Button fx:id="downloadDocumentButton" text="Download selected document" onAction="#downloadDocument"/></HBox>
+<ProgressBar fx:id="fileProgress" progress="0" maxWidth="Infinity"/><Label fx:id="fileProgressLabel" text="No transfer started" wrapText="true"/>
+<TableView fx:id="documents" prefHeight="180">
                                                 <columns>
                                                     <TableColumn fx:id="documentNameColumn" text="Document" prefWidth="240"/>
                                                     <TableColumn fx:id="verificationColumn" text="Verification status" prefWidth="200"/>
@@ -109,7 +112,8 @@
                                         <TextArea fx:id="actionNote" promptText="Reason, requested information, or forwarding note" prefRowCount="3" wrapText="true" accessibleText="Officer action reason"/>
                                         <HBox spacing="10">
                                             <ComboBox fx:id="actionKind" maxWidth="Infinity" HBox.hgrow="ALWAYS" accessibleText="Action to validate"/>
-                                            <Button fx:id="checkActionButton" text="Check action fields" onAction="#checkAction" disable="true"/>
+                                            <Button fx:id="performSelectedButton" text="Perform selected action" onAction="#performSelectedAction"/>
+<Button fx:id="checkActionButton" text="Check action fields" onAction="#checkAction" disable="true"/>
                                         </HBox>
                                         <FlowPane hgap="10" vgap="10">
                                             <Button fx:id="verifyButton" text="Verify selected document" onAction="#verifyDocument" disable="true"/>

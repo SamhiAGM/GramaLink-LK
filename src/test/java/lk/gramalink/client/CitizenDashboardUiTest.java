@@ -47,6 +47,7 @@ class CitizenDashboardUiTest {
     private static void fillDraft(Ui ui) {
         ui.<TextField>node("requestType").setText("Fictional draft type");
         ui.<TextField>node("division").setText("Fictional division");
+        ui.<TextField>node("requestTitle").setText("Fictional request title");
         ui.<TextArea>node("description").setText("Local validation only");
     }
 
@@ -80,6 +81,9 @@ class CitizenDashboardUiTest {
                 validate.fire();
                 assertTrue(ui.<Label>node("feedback").getText().contains("GN division"));
                 ui.<TextField>node("division").setText("Local division");
+                validate.fire();
+                assertTrue(ui.<Label>node("feedback").getText().contains("title"));
+                ui.<TextField>node("requestTitle").setText("Local title");
                 validate.fire();
                 assertTrue(ui.<Label>node("feedback").getText().contains("Describe"));
                 ui.<TextArea>node("description").setText("A local draft");
@@ -160,6 +164,74 @@ class CitizenDashboardUiTest {
                 ui.<Button>node("documentRemoveButton").fire();
                 assertEquals("No attachment selected", ui.<Label>node("attachmentLabel").getText());
                 assertEquals(0, ui.fixture.submissions);
+                return null;
+            });
+        }
+    }
+
+    @Test void closedRequestDisablesUploadsWithoutLockingDownloadsOrDashboard(@TempDir Path directory) throws Exception {
+        try(Ui ui=load(false)) {
+            Path pdf=directory.resolve("evidence.pdf");Files.writeString(pdf,"Local selection fixture");
+            ui.fixture.filesAvailable=true;ui.fixture.exerciseAcknowledgement=true;
+            fx(()->{ui.controller().attach(ui.fixture,()->{});return null;});
+            ui.fixture.emit(new CitizenData.Requests(List.of(
+                    new CitizenData.RequestRow("open","OTHER",Instant.EPOCH,"SUBMITTED",0L),
+                    new CitizenData.RequestRow("closed","OTHER",Instant.EPOCH,"APPROVED",5L))));
+            ui.fixture.emit(new CitizenData.RequestDetails(new CitizenData.Details("closed","Approved request",List.of(),List.of(),List.of(new CitizenData.Document("stored","evidence.pdf")))));
+            fx(()->{
+                ui.<TableView<CitizenData.RequestRow>>node("requestsTable").getSelectionModel().selectFirst();
+                ui.controller().selectAttachment(pdf);return null;
+            });
+            long deadline=System.nanoTime()+TimeUnit.SECONDS.toNanos(5);
+            while(fx(()->ui.<Button>node("uploadDocumentButton").isDisabled())) {
+                assertTrue(System.nanoTime()<deadline,"Open request upload did not become enabled");Thread.sleep(20);
+            }
+            fx(()->{
+                ui.<TableView<CitizenData.RequestRow>>node("requestsTable").getSelectionModel().select(1);
+                assertTrue(ui.<Button>node("uploadDocumentButton").isDisabled());
+                assertTrue(ui.<Button>node("documentUploadButton").isDisabled());
+                assertTrue(ui.<Button>node("uploadDocumentButton").getTooltip().getText().contains("APPROVED or REJECTED"));
+                ui.<ComboBox<CitizenData.Document>>node("documentPicker").getSelectionModel().selectFirst();
+                assertFalse(ui.<Button>node("downloadDocumentButton").isDisabled());
+                assertFalse(ui.root.lookup("#workspace").isDisabled());
+                assertFalse(ui.<Button>node("sendButton").isDisabled());
+                return null;
+            });
+        }
+    }
+
+    @Test void registeredDivisionIsLockedAndRefreshFailureCannotOverwriteCommittedSubmission() throws Exception {
+        try (Ui ui = load(false)) {
+            String id = UUID.randomUUID().toString();
+            fx(() -> {
+                ui.fixture.registeredDivision = true;
+                ui.fixture.exerciseAcknowledgement = true;
+                ui.controller().attach(ui.fixture, () -> { });
+                assertFalse(ui.<TextField>node("division").isEditable());
+                assertTrue(ui.<TextField>node("division").getText().isEmpty());
+                ui.fixture.emit(new CitizenData.Profile("DEMO-A"));
+                return null;
+            });
+            fx(() -> {
+                assertEquals("DEMO-A", ui.<TextField>node("division").getText());
+                ui.<TextField>node("requestType").setText("INCOME");
+                ui.<TextField>node("requestTitle").setText("Need a Income Certificate");
+                ui.<TextArea>node("description").setText("I need a verified income certificate to be submitted to university");
+                var payload = JsonNodeFactory.instance.objectNode().put("operation", "CREATE_REQUEST");
+                payload.putObject("data").put("id", id);
+                ui.fixture.nextReply = CompletableFuture.completedFuture(new Message(MessageType.ACK, "create-1", null, payload));
+                ui.<Button>node("submitButton").fire();
+                return null;
+            });
+            fx(() -> {
+                assertTrue(ui.<Label>node("feedback").getText().contains("Request submitted. Request ID: " + id));
+                ui.fixture.refreshError("Refresh failed: FORBIDDEN: notification denied");
+                return null;
+            });
+            fx(() -> {
+                assertTrue(ui.<Label>node("feedback").getText().contains(id));
+                assertTrue(ui.<Label>node("refreshFeedback").getText().contains("notification denied"));
+                assertEquals(1, ui.fixture.submissions);
                 return null;
             });
         }

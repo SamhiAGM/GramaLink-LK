@@ -9,11 +9,13 @@ import java.io.IOException;
 import java.time.Duration;
 import java.util.Objects;
 import java.util.Optional;
+import java.util.UUID;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.concurrent.*;
 import java.util.function.Consumer;
 
-/** UI-independent login transport. No credential verification or authenticated state is created here. */
+/** UI-independent login transport; only a correlated backend identity authorizes a workspace. */
 public final class LoginService implements AutoCloseable {
     public record Input(String host, int port, String username, String password) {
         public Input {
@@ -33,6 +35,8 @@ public final class LoginService implements AutoCloseable {
         thread.setDaemon(true);
         return thread;
     });
+    private final Object sessionLock = new Object();
+    private final AtomicLong loginGeneration = new AtomicLong();
     private final Consumer<NetworkClient.Status> status;
     private final Executor callbacks;
     private volatile NetworkClient client; // connection work is owned by worker; shutdown may close from an independent IO task
@@ -46,16 +50,21 @@ public final class LoginService implements AutoCloseable {
     private final AdminProtocol adminProtocol;
     private volatile ClientReliability reliability;
     private volatile FileTransferProgress fileProgress;
+    private volatile ClientFiles files;
     private final Consumer<ClientReliability.State> recoveryListener;
     private final ClientReliability.Policy reliabilityPolicy;
     private volatile boolean closed;
 
     public LoginService(Consumer<NetworkClient.Status> status, Executor callbacks) {
-        this(status, callbacks, CitizenProtocol.pendingBackend());
+        this(status, callbacks, CitizenProtocol.productionBackend(), GnProtocol.productionBackend(),
+                DsProtocol.productionBackend(), AdminProtocol.productionBackend(),
+                ignored -> { }, ClientReliability.Policy.defaults());
     }
 
     public LoginService(Consumer<NetworkClient.Status> status, Executor callbacks, Consumer<ClientReliability.State> recoveryListener) {
-        this(status, callbacks, CitizenProtocol.pendingBackend(), GnProtocol.pendingBackend(), DsProtocol.pendingBackend(), AdminProtocol.pendingBackend(), recoveryListener, ClientReliability.Policy.defaults());
+        this(status, callbacks, CitizenProtocol.productionBackend(), GnProtocol.productionBackend(),
+                DsProtocol.productionBackend(), AdminProtocol.productionBackend(),
+                recoveryListener, ClientReliability.Policy.defaults());
     }
 
     LoginService(Consumer<NetworkClient.Status> status, Executor callbacks, CitizenProtocol citizenProtocol) {
@@ -88,26 +97,28 @@ public final class LoginService implements AutoCloseable {
 
     public CompletableFuture<Message> login(Input input) {
         Objects.requireNonNull(input);
-        if (closed) return CompletableFuture.failedFuture(new IllegalStateException("Login service is closed."));
+        final long attempt;
+        synchronized (sessionLock) {
+            if (closed) return CompletableFuture.failedFuture(new IllegalStateException("Login service is closed."));
+            attempt = loginGeneration.incrementAndGet();
+            retireCurrentSessionLocked();
+        }
         return CompletableFuture.supplyAsync(() -> {
-            if (closed) throw new CompletionException(new IOException("Login service is closed."));
-            if (reliability != null) reliability.close();
-            if (citizen != null) citizen.close();
-            if (gn != null) gn.close();
-            if (ds != null) ds.close();
-            if (administrator != null) administrator.close();
-            if (client != null) client.close();
+            if (!isCurrentAttempt(attempt, null))
+                throw new CompletionException(new SecurityException("This login attempt was replaced."));
             AtomicReference<CitizenGateway> binding = new AtomicReference<>();
             AtomicReference<GnGateway> gnBinding = new AtomicReference<>();
             AtomicReference<DsGateway> dsBinding = new AtomicReference<>();
             AtomicReference<AdminGateway> adminBinding = new AtomicReference<>();
             AtomicReference<ClientReliability> recoveryBinding = new AtomicReference<>();
             AtomicReference<FileTransferProgress> transferBinding = new AtomicReference<>();
+            AtomicReference<ClientFiles> filesBinding = new AtomicReference<>();
             AtomicReference<NetworkClient> transportBinding = new AtomicReference<>();
-            client = new NetworkClient(input.host(), input.port(), new NetworkClient.Listener() {
+            NetworkClient transport = new NetworkClient(input.host(), input.port(), new NetworkClient.Listener() {
                 public void onStatus(NetworkClient.Status value) {
+                    if (!isCurrentAttempt(attempt, transportBinding.get())) return;
                     ClientReliability recovery = recoveryBinding.get();
-                    if (value == NetworkClient.Status.DISCONNECTED) transferBinding.get().disconnected(recovery.generation());
+                    if (value == NetworkClient.Status.DISCONNECTED) { transferBinding.get().disconnected(recovery.generation()); if(filesBinding.get()!=null) filesBinding.get().disconnected(); }
                     CitizenGateway gateway = binding.get();
                     gateway.connectionStatus(value);
                     gnBinding.get().connectionStatus(value);
@@ -115,35 +126,40 @@ public final class LoginService implements AutoCloseable {
                     adminBinding.get().connectionStatus(value);
                     if (value == NetworkClient.Status.CONNECTED) recovery.connected(); else recovery.transportDisconnected();
                     long epoch = recovery.generation();
-                    callbacks.execute(() -> { if (citizen == gateway && !closed && recovery.generation() == epoch) status.accept(value); });
+                    callbacks.execute(() -> {
+                        if (isCurrentAttempt(attempt, transportBinding.get()) && citizen == gateway
+                                && recovery.generation() == epoch) status.accept(value);
+                    });
                 }
                 public void onMessage(Message message) {
-                    try { transferBinding.get().acceptControl(recoveryBinding.get().generation(), message); }
+                    if (!isCurrentAttempt(attempt, transportBinding.get())) return;
+                    try { transferBinding.get().acceptControl(recoveryBinding.get().generation(), message); filesBinding.get().control(message); }
                     catch (IOException error) { binding.get().transportError("Invalid file transport response. Transfer stopped; storage is unconfirmed."); transportBinding.get().disconnectForRecovery(); return; }
+                    if(message.type()==MessageType.ERROR && "UNAUTHENTICATED".equals(message.payload().path("code").asText())
+                            && authorizedCount(binding.get(),gnBinding.get(),dsBinding.get(),adminBinding.get())==1) {
+                        transportBinding.get().disconnectForRecovery(); return;
+                    }
                     binding.get().incoming(message); gnBinding.get().incoming(message); dsBinding.get().incoming(message);
                     adminBinding.get().incoming(message);
                 }
                 public void onChunk(FileChunk chunk) {
-                    try { transferBinding.get().acceptDownloadChunk(recoveryBinding.get().generation(), chunk); }
+                    if (!isCurrentAttempt(attempt, transportBinding.get())) return;
+                    try { transferBinding.get().acceptDownloadChunk(recoveryBinding.get().generation(), chunk); filesBinding.get().chunk(chunk); }
                     catch (IOException error) { binding.get().transportError("Unnegotiated or invalid file chunk rejected. No file was stored."); transportBinding.get().disconnectForRecovery(); }
                 }
                 public void onDisconnectRequested() {
                     ClientReliability recovery = recoveryBinding.get();
-                    if (recovery != null) { transferBinding.get().disconnected(recovery.generation()); recovery.close(); }
+                    if (recovery != null && isCurrentAttempt(attempt, transportBinding.get())) {
+                        transferBinding.get().disconnected(recovery.generation());
+                        recovery.close();
+                    }
                 }
             }, Runnable::run);
-            transportBinding.set(client);
-            CitizenGateway gateway = new CitizenGateway(client, citizenProtocol, callbacks);
-            binding.set(gateway);
-            citizen = gateway;
-            GnGateway officerGateway = new GnGateway(client, gnProtocol, callbacks);
-            gnBinding.set(officerGateway);
-            gn = officerGateway;
-            DsGateway dsGateway = new DsGateway(client, dsProtocol, callbacks);
-            dsBinding.set(dsGateway); ds = dsGateway;
-            AdminGateway adminGateway = new AdminGateway(client, adminProtocol, callbacks);
-            adminBinding.set(adminGateway); administrator = adminGateway;
-            NetworkClient transport = client;
+            transportBinding.set(transport);
+            CitizenGateway gateway = new CitizenGateway(transport, citizenProtocol, callbacks);
+            GnGateway officerGateway = new GnGateway(transport, gnProtocol, callbacks);
+            DsGateway dsGateway = new DsGateway(transport, dsProtocol, callbacks);
+            AdminGateway adminGateway = new AdminGateway(transport, adminProtocol, callbacks);
             Runnable revoke = () -> {
                 FileTransferProgress progress = transferBinding.get(); ClientReliability recovery = recoveryBinding.get();
                 if (progress != null && recovery != null) progress.disconnected(recovery.generation());
@@ -152,40 +168,133 @@ public final class LoginService implements AutoCloseable {
             };
             ClientReliability recovery = new ClientReliability(transport, reliabilityPolicy, state -> {
                 ClientReliability source = recoveryBinding.get();
-                if (source == null || source.state() != state || citizen != gateway || closed) return;
+                if (source == null || source.state() != state || !isCurrentAttempt(attempt, transport)
+                        || citizen != gateway) return;
                 gateway.recoveryState(state); officerGateway.recoveryState(state); dsGateway.recoveryState(state); adminGateway.recoveryState(state);
                 long epoch = source.generation();
-                callbacks.execute(() -> { if (citizen == gateway && !closed && source.generation() == epoch && source.state() == state) recoveryListener.accept(state); });
+                callbacks.execute(() -> {
+                    if (isCurrentAttempt(attempt, transport) && citizen == gateway
+                            && source.generation() == epoch && source.state() == state) recoveryListener.accept(state);
+                });
             }, revoke);
-            recoveryBinding.set(recovery); reliability = recovery;
+            recoveryBinding.set(recovery);
             FileTransferProgress progress = new FileTransferProgress(() -> citizen == gateway && !closed
-                    && authorizedCount(gateway, officerGateway, dsGateway, adminGateway) == 1, recovery::generation, Runnable::run, gateway::transferProgress);
-            transferBinding.set(progress); fileProgress = progress;
+                    && authorizedCount(gateway, officerGateway, dsGateway, adminGateway) == 1, recovery::generation, Runnable::run, snapshot -> { gateway.transferProgress(snapshot); officerGateway.transferProgress(snapshot); dsGateway.transferProgress(snapshot); });
+            transferBinding.set(progress);
+            ClientFiles fileClient=new ClientFiles(transport,progress,recovery::generation,()->
+                    !closed && isCurrentAttempt(attempt,transport) && authorizedCount(gateway,officerGateway,dsGateway,adminGateway)==1);
+            filesBinding.set(fileClient); gateway.bindFiles(fileClient); officerGateway.bindFiles(fileClient); dsGateway.bindFiles(fileClient);
+
+            synchronized (sessionLock) {
+                if (!isCurrentAttempt(attempt, null)) {
+                    gateway.close(); officerGateway.close(); dsGateway.close(); adminGateway.close();
+                    recovery.close(); fileClient.close();
+                    transport.close();
+                    throw new CompletionException(new SecurityException("This login attempt was replaced."));
+                }
+                client = transport;
+                reliability = recovery; fileProgress = progress; files = fileClient;
+                binding.set(gateway); citizen = gateway;
+                gnBinding.set(officerGateway); gn = officerGateway;
+                dsBinding.set(dsGateway); ds = dsGateway;
+                adminBinding.set(adminGateway); administrator = adminGateway;
+            }
             try {
                 transport.connect(reliabilityPolicy.connectTimeout());
-                if (closed) { client.close(); throw new IOException("Login service is closed."); }
-                // Provisional payload contract: Shadhir must confirm these field names when adding AuthService.
+                if (!isCurrentAttempt(attempt, transport)) {
+                    transport.close();
+                    throw new SecurityException("This login attempt was replaced.");
+                }
                 var payload = JsonNodeFactory.instance.objectNode()
                         .put("username", input.username()).put("password", input.password());
-                return client.request(new Message(MessageType.LOGIN, payload), Duration.ofSeconds(10))
-                        .thenApply(reply -> {
-                            gateway.acceptLoginReply(reply);
-                            officerGateway.acceptLoginReply(reply);
-                            dsGateway.acceptLoginReply(reply);
-                            adminGateway.acceptLoginReply(reply);
-                            if (authorizedCount(gateway, officerGateway, dsGateway, adminGateway) == 1) recovery.authenticated();
-                            return reply;
-                        });
-            } catch (IOException error) { recovery.connectionFailed(); throw new CompletionException(error); }
+                String correlationId = UUID.randomUUID().toString();
+                return transport.request(new Message(MessageType.LOGIN, correlationId, null, payload), Duration.ofSeconds(10))
+                        .thenApply(reply -> completeLogin(attempt, correlationId, reply, transport, recovery,
+                                gateway, officerGateway, dsGateway, adminGateway));
+            } catch (IOException error) {
+                if (isCurrentAttempt(attempt, transport)) recovery.connectionFailed();
+                throw new CompletionException(error);
+            }
         }, worker).thenCompose(reply -> reply);
     }
 
     public CompletableFuture<Void> disconnect() {
-        if (closed) return CompletableFuture.completedFuture(null);
-        ClientReliability recovery = reliability; if (recovery != null) recovery.close();
-        NetworkClient transport = client;
-        // Do not queue a close behind a blocked file/socket write on the login worker.
-        return CompletableFuture.runAsync(() -> { if (transport != null) transport.close(); });
+        long signedOutGeneration;
+        synchronized (sessionLock) {
+            if (closed) return CompletableFuture.completedFuture(null);
+            signedOutGeneration = loginGeneration.incrementAndGet();
+            retireCurrentSessionLocked();
+        }
+        callbacks.execute(() -> {
+            if (!closed && loginGeneration.get() == signedOutGeneration && client == null)
+                status.accept(NetworkClient.Status.DISCONNECTED);
+        });
+        return CompletableFuture.completedFuture(null);
+    }
+
+    private Message completeLogin(long attempt, String correlationId, Message reply, NetworkClient transport,
+                                 ClientReliability recovery, CitizenGateway gateway, GnGateway officerGateway,
+                                 DsGateway dsGateway, AdminGateway adminGateway) {
+        if (!isCurrentAttempt(attempt, transport))
+            throw new CompletionException(new SecurityException("This login response belongs to a replaced session."));
+        if (!correlationId.equals(reply.correlationId()))
+            throw rejectLogin(attempt, transport, "The login response correlation did not match the request.");
+        if (reply.type() == MessageType.ERROR) return reply;
+        if (reply.type() != MessageType.LOGIN_OK)
+            throw rejectLogin(attempt, transport, "The server returned an invalid login response.");
+
+        gateway.acceptLoginReply(reply);
+        officerGateway.acceptLoginReply(reply);
+        dsGateway.acceptLoginReply(reply);
+        adminGateway.acceptLoginReply(reply);
+        int authorized = authorizedCount(gateway, officerGateway, dsGateway, adminGateway);
+        if (authorized != 1 || !isCurrentAttempt(attempt, transport))
+            throw rejectLogin(attempt, transport, "The server returned an invalid or unsupported login identity.");
+
+        recovery.authenticated();
+        return reply;
+    }
+
+    private SecurityException rejectLogin(long attempt, NetworkClient transport, String message) {
+        long revokedGeneration = -1;
+        synchronized (sessionLock) {
+            if (isCurrentAttempt(attempt, transport)) {
+                revokedGeneration = loginGeneration.incrementAndGet();
+                retireCurrentSessionLocked();
+            }
+        }
+        if (revokedGeneration >= 0) {
+            long signedOutGeneration = revokedGeneration;
+            callbacks.execute(() -> {
+                if (!closed && loginGeneration.get() == signedOutGeneration && client == null)
+                    status.accept(NetworkClient.Status.DISCONNECTED);
+            });
+        }
+        return new SecurityException(message);
+    }
+
+    private boolean isCurrentAttempt(long attempt, NetworkClient expectedClient) {
+        return !closed && loginGeneration.get() == attempt
+                && (expectedClient == null || client == expectedClient);
+    }
+
+    private void retireCurrentSessionLocked() {
+        ClientFiles oldFiles=files; files=null;
+        ClientReliability oldReliability = reliability;
+        CitizenGateway oldCitizen = citizen;
+        GnGateway oldGn = gn;
+        DsGateway oldDs = ds;
+        AdminGateway oldAdmin = administrator;
+        NetworkClient oldClient = client;
+        reliability = null; fileProgress = null;
+        citizen = null; gn = null; ds = null; administrator = null; client = null;
+        if(oldFiles!=null) oldFiles.close();
+        if (oldCitizen != null) oldCitizen.close();
+        if (oldGn != null) oldGn.close();
+        if (oldDs != null) oldDs.close();
+        if (oldAdmin != null) oldAdmin.close();
+        if (oldReliability != null) oldReliability.close();
+        if (oldClient != null) oldClient.close();
     }
 
     public ClientReliability.State recoveryState() { ClientReliability current = reliability; return current == null ? ClientReliability.State.OFFLINE : current.state(); }
@@ -258,15 +367,12 @@ public final class LoginService implements AutoCloseable {
     }
 
     @Override public void close() {
-        if (closed) return;
-        closed = true;
-        if (reliability != null) reliability.close();
-        if (citizen != null) citizen.close();
-        if (gn != null) gn.close();
-        if (ds != null) ds.close();
-        if (administrator != null) administrator.close();
-        NetworkClient transport = client;
-        CompletableFuture.runAsync(() -> { if (transport != null) transport.close(); });
+        synchronized (sessionLock) {
+            if (closed) return;
+            closed = true;
+            loginGeneration.incrementAndGet();
+            retireCurrentSessionLocked();
+        }
         worker.shutdown();
     }
 }

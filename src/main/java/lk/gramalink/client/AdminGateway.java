@@ -11,6 +11,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /** Administrative boundary on the login NetworkClient. Server authorization is always final. */
 public final class AdminGateway implements AdminWorkspace, AutoCloseable {
     public interface Listener {
+        default void onLoading(boolean loading) { }
         default void onRecovery(ClientReliability.State state) { }
         default void onUpdate(AdminData.Update update) { }
         default void onStatus(NetworkClient.Status status) { }
@@ -102,6 +103,37 @@ public final class AdminGateway implements AdminWorkspace, AutoCloseable {
         return isAdministratorAuthorized() && protocol.supports(operation) && !protocol.outboundTypes(operation).isEmpty();
     }
     public void setListener(Listener listener) { this.listener = Objects.requireNonNull(listener); }
+    @Override public boolean usesBackendContract() { return protocol.loadsBackend(); }
+    private final java.util.concurrent.atomic.AtomicBoolean refreshQueued = new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicBoolean refreshDirty = new java.util.concurrent.atomic.AtomicBoolean();
+    @Override public void refresh() {
+        if(!protocol.loadsBackend() || !isAdministratorAuthorized()) return;
+        refreshDirty.set(true); if(!refreshQueued.compareAndSet(false,true)) return;
+        long epoch=sessionEpoch.get();
+        publish(epoch,true,target->target.onLoading(true));
+        task(() -> {
+            try {
+                int passes=0;
+                do {
+                    refreshDirty.set(false);
+                    var queries=new BackendQueries(client,()->{ requireEpoch(epoch); requireAdministrator(); });
+                    var updates=queries.administrator(identity().orElseThrow().userId());
+                    requireEpoch(epoch); requireAdministrator();
+                    for(AdminData.Update update:updates) {
+                        synchronized(stateLock){
+                            if(update instanceof AdminData.Users snapshot){ users.clear(); snapshot.rows().forEach(r->users.put(r.id(),r)); }
+                            else if(update instanceof AdminData.Offices snapshot){ offices.clear(); snapshot.rows().forEach(r->offices.put(r.id(),r)); }
+                            else if(update instanceof AdminData.Catalogues snapshot) catalogues=snapshot;
+                        }
+                        publish(epoch,true,target->target.onUpdate(update));
+                    }
+                } while(++passes<2 && refreshDirty.get() && isAdministratorAuthorized() && sessionEpoch.get()==epoch);
+            } catch(IOException e){publish(epoch,true,target->target.onError(e.getMessage()));}
+            finally {publish(epoch,true,target->target.onLoading(false));refreshQueued.set(false); if(refreshDirty.get() && isAdministratorAuthorized()) refresh();}
+            return null;
+        });
+    }
+
     public CompletableFuture<Message> perform(AdminData.Command command) {
         Objects.requireNonNull(command);
         if (!isAdministratorAuthorized()) return CompletableFuture.failedFuture(new SecurityException("Administrator authorization is required."));
@@ -116,7 +148,12 @@ public final class AdminGateway implements AdminWorkspace, AutoCloseable {
             validate(command);
             requireEpoch(commandEpoch);
             return client.request(outbound, Duration.ofSeconds(10));
-        }).thenCompose(reply -> reply);
+        }).thenCompose(reply -> reply).thenApply(reply -> { if(protocol.loadsBackend()) refresh(); return reply; });
+    }
+    @Override public void validateCommand(AdminData.Command command) {
+        if (!supports(command.operation())) throw AdminProtocol.pending();
+        validate(command);
+        protocol.encode(command); // Validate the actual wire contract without sending anything.
     }
     private void validate(AdminData.Command command) {
         requireAdministrator();
@@ -124,10 +161,10 @@ public final class AdminGateway implements AdminWorkspace, AutoCloseable {
             if (!command.operation().create()) {
                 if (command.operation().userOperation()) {
                     AdminData.UserRow row = users.get(command.targetId());
-                    if (row == null || !row.demoAccount()) throw new SecurityException("Only server-identified demo accounts may be managed.");
+                    if (row == null || (!protocol.loadsBackend() && !row.demoAccount())) throw new SecurityException("Only server-identified demo accounts may be managed.");
                 } else {
                     AdminData.OfficeRow row = offices.get(command.targetId());
-                    if (row == null || !row.demoOffice()) throw new SecurityException("Only server-identified demo offices may be managed.");
+                    if (row == null || (!protocol.loadsBackend() && !row.demoOffice())) throw new SecurityException("Only server-identified demo offices may be managed.");
                 }
             }
             if (command.user() != null) {

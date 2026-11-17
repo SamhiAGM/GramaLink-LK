@@ -10,7 +10,8 @@
             <Label text="GramaLink LK" styleClass="brand-name"/>
             <Label text="DS OFFICER WORKSPACE" styleClass="sidebar-caption"/>
             <Separator/>
-            <Button fx:id="navDashboard" text="Dashboard" onAction="#showDashboard" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button text="Refresh from server" onAction="#refreshFromServer"/>
+<Button fx:id="navDashboard" text="Dashboard" onAction="#showDashboard" maxWidth="Infinity" styleClass="nav-button"/>
             <Button fx:id="navRequests" text="Forwarded Requests" onAction="#showRequests" maxWidth="Infinity" styleClass="nav-button"/>
             <Button fx:id="navNotifications" text="Notifications" onAction="#showNotifications" maxWidth="Infinity" styleClass="nav-button"/>
             <Button fx:id="navChat" text="Officer Chat" onAction="#showChat" maxWidth="Infinity" styleClass="nav-button"/>
@@ -93,7 +94,9 @@
                                     <HBox spacing="16">
                                         <VBox spacing="10" HBox.hgrow="ALWAYS">
                                             <Label text="Supporting documents" styleClass="subheading"/>
-                                            <TableView fx:id="documents" prefHeight="180">
+                                            <HBox spacing="10"><Button fx:id="uploadDocumentButton" text="Upload PDF" onAction="#uploadDocument"/><Button fx:id="downloadDocumentButton" text="Download selected document" onAction="#downloadDocument"/></HBox>
+<ProgressBar fx:id="fileProgress" progress="0" maxWidth="Infinity"/><Label fx:id="fileProgressLabel" text="No transfer started" wrapText="true"/>
+<TableView fx:id="documents" prefHeight="180">
                                                 <columns>
                                                     <TableColumn fx:id="documentNameColumn" text="Document" prefWidth="260"/>
                                                     <TableColumn fx:id="documentStateColumn" text="Server document state" prefWidth="210"/>
@@ -122,7 +125,7 @@
                                             <Button fx:id="rejectButton" text="Reject request" onAction="#reject" disable="true" styleClass="danger-button"/>
                                             <Button fx:id="returnButton" text="Return to GN" onAction="#returnToGn" disable="true"/>
                                         </FlowPane>
-                                        <Label text="Decision submission awaits DS server integration. A sent message or acknowledgement is not a committed decision." wrapText="true" styleClass="muted"/>
+                                        <Label text="Decisions use the current server version. After a conflict, refresh authoritative records before deciding again." wrapText="true" styleClass="muted"/>
                                     </VBox>
                                 </VBox>
                             </ScrollPane>

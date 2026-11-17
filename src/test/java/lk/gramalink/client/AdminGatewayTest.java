@@ -127,7 +127,7 @@ class AdminGatewayTest {
                     JsonUtil.writeMessage(output, new Message(MessageType.ACK, sent.correlationId(), null, JsonNodeFactory.instance.objectNode()));
                     assertEquals(MessageType.ACK, future.get(3, TimeUnit.SECONDS).type());
                 }
-                assertEquals(6, f.adapter.encoded.size()); assertTrue(f.updates.isEmpty(), "ACK must not produce users, offices, audit entries or statistics");
+                assertEquals(AdminData.Operation.values().length, f.adapter.encoded.size()); assertTrue(f.updates.isEmpty(), "ACK must not produce users, offices, audit entries or statistics");
             }
         }
     }
@@ -168,7 +168,7 @@ class AdminGatewayTest {
         assertThrows(IllegalArgumentException.class, () -> new AdminData.UserDraft("", "name", OfflineAdminWorkspace.ROLE, null));
         assertThrows(IllegalArgumentException.class, () -> new AdminData.UserDraft("user", "name", null, null));
         assertThrows(IllegalArgumentException.class, () -> new AdminData.OfficeDraft("name", OfflineAdminWorkspace.GN, ""));
-        assertThrows(IllegalArgumentException.class, () -> new AdminData.Command(AdminData.Operation.DISABLE_DEMO_USER, "id", null, null, ""));
+        assertDoesNotThrow(() -> new AdminData.Command(AdminData.Operation.DISABLE_DEMO_USER, "id", null, null, ""));
         assertThrows(IllegalArgumentException.class, () -> new AdminData.Command(AdminData.Operation.ARCHIVE_DEMO_OFFICE, "id", null, null, ""));
         assertThrows(IllegalArgumentException.class, () -> new AdminData.Overview(-1L, null, null, null, null));
         assertThrows(IllegalArgumentException.class, () -> new AdminData.StatusCount("backend state", -1));

@@ -36,7 +36,9 @@ public final class AdminDashboardController {
     @FXML private TableColumn<AdminData.StatusCount, String> requestStatusColumn, requestCountColumn;
     @FXML private TableView<AdminData.AuditEntry> auditTable;
     @FXML private TableColumn<AdminData.AuditEntry, String> auditDateColumn, auditUserColumn, auditActivityColumn, auditTargetColumn, auditOutcomeColumn;
-    @FXML private TextField username, userDisplayName, officeName, officeArea;
+    @FXML private TextField username, userDisplayName, officeName, officeArea, userDivision, officeParentId;
+    @FXML private PasswordField userPassword;
+    @FXML private Button activateUserButton;
     @FXML private ComboBox<AdminData.Choice> userRole, officeKind;
     @FXML private ComboBox<AdminData.OfficeRow> userOffice;
     @FXML private ComboBox<AdminData.Operation> userIntent, officeIntent;
@@ -44,6 +46,7 @@ public final class AdminDashboardController {
     @FXML private Button createUserButton, updateUserButton, disableUserButton, checkUserButton;
     @FXML private Button createOfficeButton, updateOfficeButton, archiveOfficeButton, checkOfficeButton;
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm").withZone(ZoneId.of("Asia/Colombo"));
+    private boolean loading;
     private long bindingEpoch;
     private AdminWorkspace gateway;
     private Runnable returnToLogin;
@@ -56,10 +59,10 @@ public final class AdminDashboardController {
         column(connectedColumn, row -> date(row.connectedAt())); column(lastActivityColumn, row -> date(row.lastActivityAt()));
         column(userIdColumn, AdminData.UserRow::id); column(usernameColumn, AdminData.UserRow::username); column(displayNameColumn, AdminData.UserRow::displayName);
         column(roleColumn, row -> row.role() == null ? null : row.role().label()); column(userOfficeColumn, AdminData.UserRow::officeId);
-        column(userStateColumn, AdminData.UserRow::state); column(demoUserColumn, row -> row.demoAccount() ? "Server-identified demo" : "Read only");
+        column(userStateColumn, AdminData.UserRow::state); column(demoUserColumn, row -> row.demoAccount() ? "Preview fixture" : "Server authorization required");
         column(officeIdColumn, AdminData.OfficeRow::id); column(officeNameColumn, AdminData.OfficeRow::name);
         column(officeKindColumn, row -> row.kind() == null ? null : row.kind().label()); column(officeAreaColumn, AdminData.OfficeRow::area);
-        column(officeStateColumn, AdminData.OfficeRow::state); column(demoOfficeColumn, row -> row.demoOffice() ? "Server-identified demo" : "Read only");
+        column(officeStateColumn, AdminData.OfficeRow::state); column(demoOfficeColumn, row -> row.demoOffice() ? "Preview fixture" : "Server authorization required");
         column(requestStatusColumn, AdminData.StatusCount::status); column(requestCountColumn, row -> Long.toString(row.count()));
         column(auditDateColumn, row -> date(row.at())); column(auditUserColumn, AdminData.AuditEntry::user);
         column(auditActivityColumn, AdminData.AuditEntry::activity); column(auditTargetColumn, AdminData.AuditEntry::target); column(auditOutcomeColumn, AdminData.AuditEntry::outcome);
@@ -81,12 +84,24 @@ public final class AdminDashboardController {
         final long epoch = ++bindingEpoch; this.gateway = gateway; this.returnToLogin = returnToLogin; active = true;
         administratorName.setText(gateway.identity().orElseThrow().displayName()); setBusy(false); status(true); refreshActions();
         gateway.setListener(new AdminGateway.Listener() {
+            public void onLoading(boolean value){Platform.runLater(()->{if(bindingCurrent(epoch,gateway)){loading=value;setBusy(busy);}});}
             public void onRecovery(ClientReliability.State state) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) recovery(state); }); }
             public void onUpdate(AdminData.Update update) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway) && gateway.isAdministratorAuthorized()) apply(update); }); }
             public void onStatus(NetworkClient.Status value) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) status(value == NetworkClient.Status.CONNECTED && gateway.isAdministratorAuthorized()); }); }
             public void onError(String error) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) feedback(error, true); }); }
         });
+        if(gateway.usesBackendContract()) {
+            userIntent.getItems().setAll(AdminData.Operation.CREATE_DEMO_USER,AdminData.Operation.ENABLE_USER,AdminData.Operation.DISABLE_DEMO_USER);
+            officeIntent.getItems().setAll(AdminData.Operation.CREATE_DEMO_OFFICE,AdminData.Operation.UPDATE_DEMO_OFFICE);
+            userIntent.setValue(AdminData.Operation.CREATE_DEMO_USER);
+            officeIntent.setValue(AdminData.Operation.CREATE_DEMO_OFFICE);
+            clientsTable.setPlaceholder(new Label("The backend supplies an online count only; per-client session details are unavailable."));
+            userDisplayName.setVisible(false); userDisplayName.setManaged(false);
+        }
+        gateway.refresh();
     }
+    @FXML private void refreshFromServer() { if(gateway!=null) gateway.refresh(); }
+    @FXML private void activateUser() { performUser(AdminData.Operation.ENABLE_USER); }
     @FXML private void showOverview() { sections.getSelectionModel().select(0); }
     @FXML private void showClients() { sections.getSelectionModel().select(1); }
     @FXML private void showUsers() { sections.getSelectionModel().select(2); }
@@ -134,34 +149,47 @@ public final class AdminDashboardController {
         boolean ready = gateway != null && gateway.isAdministratorAuthorized() && !busy;
         AdminData.UserRow user = usersTable.getSelectionModel().getSelectedItem(); AdminData.OfficeRow office = officesTable.getSelectionModel().getSelectedItem();
         createUserButton.setDisable(!can(AdminData.Operation.CREATE_DEMO_USER, ready && !userRole.getItems().isEmpty()));
-        updateUserButton.setDisable(!can(AdminData.Operation.UPDATE_DEMO_USER, ready && user != null && user.demoAccount()));
-        disableUserButton.setDisable(!can(AdminData.Operation.DISABLE_DEMO_USER, ready && user != null && user.demoAccount()));
+        updateUserButton.setDisable(!can(AdminData.Operation.UPDATE_DEMO_USER, ready && user != null && (gateway.usesBackendContract() || user.demoAccount())));
+        disableUserButton.setDisable(!can(AdminData.Operation.DISABLE_DEMO_USER, ready && user != null && (gateway.usesBackendContract() || user.demoAccount())));
         createOfficeButton.setDisable(!can(AdminData.Operation.CREATE_DEMO_OFFICE, ready && !officeKind.getItems().isEmpty()));
-        updateOfficeButton.setDisable(!can(AdminData.Operation.UPDATE_DEMO_OFFICE, ready && office != null && office.demoOffice()));
-        archiveOfficeButton.setDisable(!can(AdminData.Operation.ARCHIVE_DEMO_OFFICE, ready && office != null && office.demoOffice()));
+        updateOfficeButton.setDisable(!can(AdminData.Operation.UPDATE_DEMO_OFFICE, ready && office != null && (gateway.usesBackendContract() || office.demoOffice())));
+        archiveOfficeButton.setDisable(!can(AdminData.Operation.ARCHIVE_DEMO_OFFICE, ready && office != null && (gateway.usesBackendContract() || office.demoOffice())));
+        activateUserButton.setDisable(!ready || user==null || !gateway.supports(AdminData.Operation.ENABLE_USER));
+        if (gateway != null && gateway.usesBackendContract() && user != null) {
+            boolean protectedAccount=user.role()!=null && "ADMIN".equals(user.role().code())
+                    || gateway.identity().map(identity->identity.userId().equals(user.id())).orElse(false);
+            activateUserButton.setDisable(activateUserButton.isDisable() || protectedAccount || !"Inactive".equals(user.state()));
+            disableUserButton.setDisable(disableUserButton.isDisable() || protectedAccount || !"Active".equals(user.state()));
+        }
         checkUserButton.setDisable(!ready); checkOfficeButton.setDisable(!ready);
         usersTable.setDisable(busy); officesTable.setDisable(busy); userForm.setDisable(busy); officeForm.setDisable(busy);
     }
     private AdminData.Command userCommand(AdminData.Operation operation) {
+        if(operation==null) throw new IllegalArgumentException("Select a user management action first.");
         AdminData.UserRow selected = usersTable.getSelectionModel().getSelectedItem();
         if (!operation.userOperation()) throw new IllegalArgumentException("Select a demo user action.");
-        if (!operation.create() && (selected == null || !selected.demoAccount())) throw new IllegalArgumentException("Select a server-identified demo account. Other accounts are read only.");
-        AdminData.UserDraft draft = operation == AdminData.Operation.DISABLE_DEMO_USER ? null : new AdminData.UserDraft(username.getText(), userDisplayName.getText(), userRole.getValue(), userOffice.getValue() == null ? null : userOffice.getValue().id());
+        if (!operation.create() && (selected == null || (!gateway.usesBackendContract() && !selected.demoAccount()))) throw new IllegalArgumentException("Select a server-identified demo account. Other accounts are read only.");
+        AdminData.UserDraft draft = operation == AdminData.Operation.DISABLE_DEMO_USER || operation == AdminData.Operation.ENABLE_USER ? null : new AdminData.UserDraft(username.getText(),
+                gateway.usesBackendContract() ? username.getText() : userDisplayName.getText(), userRole.getValue(), userOffice.getValue() == null ? null : userOffice.getValue().id(), userPassword.getText(), userDivision.getText());
         return new AdminData.Command(operation, operation.create() ? null : selected.id(), draft, null, userReason.getText());
     }
     private AdminData.Command officeCommand(AdminData.Operation operation) {
+        if(operation==null) throw new IllegalArgumentException("Select an office management action first.");
         AdminData.OfficeRow selected = officesTable.getSelectionModel().getSelectedItem();
         if (operation.userOperation()) throw new IllegalArgumentException("Select a demo office action.");
-        if (!operation.create() && (selected == null || !selected.demoOffice())) throw new IllegalArgumentException("Select a server-identified demo office. Other offices are read only.");
-        AdminData.OfficeDraft draft = operation == AdminData.Operation.ARCHIVE_DEMO_OFFICE ? null : new AdminData.OfficeDraft(officeName.getText(), officeKind.getValue(), officeArea.getText());
+        if (!operation.create() && (selected == null || (!gateway.usesBackendContract() && !selected.demoOffice()))) throw new IllegalArgumentException("Select a server-identified demo office. Other offices are read only.");
+        AdminData.OfficeDraft draft = operation == AdminData.Operation.ARCHIVE_DEMO_OFFICE ? null
+                : operation == AdminData.Operation.UPDATE_DEMO_OFFICE && gateway.usesBackendContract()
+                ? new AdminData.OfficeDraft(officeName.getText(), selected.kind(), selected.area(), null)
+                : new AdminData.OfficeDraft(officeName.getText(), officeKind.getValue(), officeArea.getText(),officeParentId.getText());
         return new AdminData.Command(operation, operation.create() ? null : selected.id(), null, draft, officeReason.getText());
     }
     @FXML private void checkUser() {
-        try { gateway.requireAdministrator(); userCommand(userIntent.getValue()); feedback("Demo user fields are valid. Nothing has been submitted or changed.", false); }
+        try { gateway.requireAdministrator(); var command=userCommand(userIntent.getValue()); gateway.validateCommand(command); feedback("Demo user fields are valid. Nothing has been submitted or changed.", false); }
         catch (IllegalArgumentException | SecurityException error) { feedback(error.getMessage(), true); }
     }
     @FXML private void checkOffice() {
-        try { gateway.requireAdministrator(); officeCommand(officeIntent.getValue()); feedback("Demo office fields are valid. Nothing has been submitted or changed.", false); }
+        try { gateway.requireAdministrator(); var command=officeCommand(officeIntent.getValue()); gateway.validateCommand(command); feedback("Demo office fields are valid. Nothing has been submitted or changed.", false); }
         catch (IllegalArgumentException | SecurityException error) { feedback(error.getMessage(), true); }
     }
     @FXML private void createUser() { performUser(AdminData.Operation.CREATE_DEMO_USER); }
@@ -171,11 +199,11 @@ public final class AdminDashboardController {
     @FXML private void updateOffice() { performOffice(AdminData.Operation.UPDATE_DEMO_OFFICE); }
     @FXML private void archiveOffice() { performOffice(AdminData.Operation.ARCHIVE_DEMO_OFFICE); }
     private void performUser(AdminData.Operation operation) {
-        try { gateway.requireAdministrator(); perform(userCommand(operation)); }
+        try { gateway.requireAdministrator(); var command=userCommand(operation); gateway.validateCommand(command); userPassword.clear(); perform(command); }
         catch (IllegalArgumentException | SecurityException error) { feedback(error.getMessage(), true); }
     }
     private void performOffice(AdminData.Operation operation) {
-        try { gateway.requireAdministrator(); perform(officeCommand(operation)); }
+        try { gateway.requireAdministrator(); var command=officeCommand(operation); gateway.validateCommand(command); perform(command); }
         catch (IllegalArgumentException | SecurityException error) { feedback(error.getMessage(), true); }
     }
     private void perform(AdminData.Command command) {
@@ -194,11 +222,16 @@ public final class AdminDashboardController {
         username.setText(row == null ? "" : Objects.toString(row.username(), "")); userDisplayName.setText(row == null ? "" : Objects.toString(row.displayName(), ""));
         userRole.setValue(row == null || !userRole.getItems().contains(row.role()) ? null : row.role());
         userOffice.setValue(row == null ? null : userOffice.getItems().stream().filter(office -> office.id().equals(row.officeId())).findFirst().orElse(null));
-        userReason.clear(); userIntent.setValue(row == null ? AdminData.Operation.CREATE_DEMO_USER : AdminData.Operation.UPDATE_DEMO_USER); refreshActions();
+        userPassword.clear(); userDivision.clear();
+        userReason.clear(); userIntent.setValue(row == null ? AdminData.Operation.CREATE_DEMO_USER
+                : gateway != null && gateway.usesBackendContract()
+                ? ("Inactive".equals(row.state()) ? AdminData.Operation.ENABLE_USER : AdminData.Operation.DISABLE_DEMO_USER)
+                : AdminData.Operation.UPDATE_DEMO_USER); refreshActions();
     }
     private void fillOffice(AdminData.OfficeRow row) {
         officeName.setText(row == null ? "" : Objects.toString(row.name(), "")); officeArea.setText(row == null ? "" : Objects.toString(row.area(), ""));
         officeKind.setValue(row == null || !officeKind.getItems().contains(row.kind()) ? null : row.kind());
+        officeParentId.clear();
         officeReason.clear(); officeIntent.setValue(row == null ? AdminData.Operation.CREATE_DEMO_OFFICE : AdminData.Operation.UPDATE_DEMO_OFFICE); refreshActions();
     }
     @FXML private void clearUserForm() { usersTable.getSelectionModel().clearSelection(); fillUser(null); }
@@ -234,7 +267,7 @@ public final class AdminDashboardController {
         } else if (update instanceof AdminData.Audit data) { auditTable.getItems().setAll(data.rows()); loaded(auditTable); }
         refreshActions();
     }
-    private void setBusy(boolean value) { busy = value; busyIndicator.setVisible(value); activityLabel.setText(value ? "Waiting for the administrative service…" : ""); refreshActions(); }
+    private void setBusy(boolean value) { busy = value; busyIndicator.setVisible(value || loading); activityLabel.setText(value ? "Waiting for the administrative service…" : ""); refreshActions(); }
     private void feedback(String text, boolean error) {
         feedback.setText(text); feedback.getStyleClass().remove("error-notice"); if (error) feedback.getStyleClass().add("error-notice");
     }

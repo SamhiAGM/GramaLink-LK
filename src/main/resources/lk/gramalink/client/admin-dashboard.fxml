@@ -10,7 +10,8 @@
             <Label text="GramaLink LK" styleClass="brand-name"/>
             <Label text="ADMINISTRATOR WORKSPACE" styleClass="sidebar-caption"/>
             <Separator/>
-            <Button fx:id="navOverview" text="Overview" onAction="#showOverview" maxWidth="Infinity" styleClass="nav-button"/>
+            <Button text="Refresh from server" onAction="#refreshFromServer"/>
+<Button fx:id="navOverview" text="Overview" onAction="#showOverview" maxWidth="Infinity" styleClass="nav-button"/>
             <Button fx:id="navClients" text="Online Clients" onAction="#showClients" maxWidth="Infinity" styleClass="nav-button"/>
             <Button fx:id="navUsers" text="User Management" onAction="#showUsers" maxWidth="Infinity" styleClass="nav-button"/>
             <Button fx:id="navOffices" text="Office Management" onAction="#showOffices" maxWidth="Infinity" styleClass="nav-button"/>
@@ -32,7 +33,7 @@
                 <Circle fx:id="connectionDot" radius="5" styleClass="offline"/>
                 <Label fx:id="connectionLabel" text="Not connected"/>
             </HBox>
-            <Label fx:id="feedback" text="Administrative data and submissions await server support. Table rows, statistics and audit entries change only from authoritative server data."
+            <Label fx:id="feedback" text="Administrative records and statistics come from the server. Unsupported editing, archiving and session details remain unavailable."
                    wrapText="true" maxWidth="Infinity" styleClass="notice"/>
             <HBox fx:id="activityRow" spacing="10" alignment="CENTER_LEFT">
                 <ProgressIndicator fx:id="busyIndicator" visible="false" prefWidth="20" prefHeight="20"/>
@@ -45,20 +46,20 @@
                             <ScrollPane fitToWidth="true">
                                 <VBox spacing="20" styleClass="section">
                                     <Label text="System overview" styleClass="section-title"/>
-                                    <Label text="Backend-provided totals for connected clients, demo accounts, offices and requests." wrapText="true" styleClass="muted"/>
+                                    <Label text="Backend request/user statistics and online connection count. A dash means that total was not supplied." wrapText="true" styleClass="muted"/>
                                     <HBox spacing="12">
                                         <VBox spacing="10" styleClass="metric-card" HBox.hgrow="ALWAYS"><Label text="CONNECTED CLIENTS" styleClass="eyebrow"/><Label fx:id="clientsCount" text="—" styleClass="metric"/></VBox>
-                                        <VBox spacing="10" styleClass="metric-card" HBox.hgrow="ALWAYS"><Label text="DEMO USERS" styleClass="eyebrow"/><Label fx:id="usersCount" text="—" styleClass="metric"/></VBox>
+                                        <VBox spacing="10" styleClass="metric-card" HBox.hgrow="ALWAYS"><Label text="USERS" styleClass="eyebrow"/><Label fx:id="usersCount" text="—" styleClass="metric"/></VBox>
                                         <VBox spacing="10" styleClass="metric-card" HBox.hgrow="ALWAYS"><Label text="OFFICES" styleClass="eyebrow"/><Label fx:id="officesCount" text="—" styleClass="metric"/></VBox>
                                         <VBox spacing="10" styleClass="metric-card" HBox.hgrow="ALWAYS"><Label text="REQUESTS" styleClass="eyebrow"/><Label fx:id="requestsCount" text="—" styleClass="metric"/></VBox>
                                     </HBox>
                                     <Label fx:id="overviewAsOf" text="Server overview has not been loaded." styleClass="muted"/>
                                     <VBox spacing="14" styleClass="card">
                                         <Label text="Explore your administrative workspace" styleClass="section-title"/>
-                                        <Label text="Inspect available sessions, manage server-identified demo records and review recorded activities. Unknown values remain unknown; table rows are not used as global totals." wrapText="true" styleClass="muted"/>
+                                        <Label text="Review the online connection count, manage authorized accounts and offices, and inspect recorded audit activities." wrapText="true" styleClass="muted"/>
                                         <FlowPane hgap="10" vgap="10">
                                             <Button text="View clients" onAction="#showClients"/>
-                                            <Button text="Manage demo users" onAction="#showUsers"/>
+                                            <Button text="Manage users" onAction="#showUsers"/>
                                             <Button text="Review audit logs" onAction="#showAudit"/>
                                             <Button text="Refresh from server" disable="true"/>
                                         </FlowPane>
@@ -81,29 +82,32 @@
                         <Tab text="User Management">
                             <ScrollPane fx:id="usersScroll" fitToWidth="true">
                                 <VBox spacing="16" styleClass="section">
-                                    <Label text="Demo user management" styleClass="section-title"/>
-                                    <Label text="Only accounts explicitly identified by the server as demo records may be changed. Other listed accounts are read only." wrapText="true" styleClass="muted"/>
+                                    <Label text="User management" styleClass="section-title"/>
+                                    <Label text="The server authorizes all account changes. General account editing is unsupported." wrapText="true" styleClass="muted"/>
                                     <TableView fx:id="usersTable" prefHeight="220"><columns>
                                         <TableColumn fx:id="userIdColumn" text="User ID" prefWidth="140"/><TableColumn fx:id="usernameColumn" text="Username" prefWidth="150"/>
-                                        <TableColumn fx:id="displayNameColumn" text="Display name" prefWidth="170"/><TableColumn fx:id="roleColumn" text="Role" prefWidth="160"/>
+                                        <TableColumn fx:id="displayNameColumn" text="Display name (not supplied by this backend)" prefWidth="170"/><TableColumn fx:id="roleColumn" text="Role" prefWidth="160"/>
                                         <TableColumn fx:id="userOfficeColumn" text="Office reference" prefWidth="170"/><TableColumn fx:id="userStateColumn" text="State" prefWidth="140"/>
                                         <TableColumn fx:id="demoUserColumn" text="Management scope" prefWidth="190"/>
                                     </columns></TableView>
                                     <VBox fx:id="userForm" spacing="12" styleClass="card">
-                                        <Label text="Demo account draft" styleClass="subheading"/>
-                                        <Label text="Username"/><TextField fx:id="username" promptText="Demo username" accessibleText="Demo username"/>
-                                        <Label text="Display name"/><TextField fx:id="userDisplayName" promptText="Demo display name" accessibleText="Demo display name"/>
-                                        <Label text="Role from server catalogue"/><ComboBox fx:id="userRole" promptText="Awaiting backend role catalogue" maxWidth="Infinity" accessibleText="Demo user role"/>
+                                        <Label text="New account / activation" styleClass="subheading"/>
+                                        <Label text="Initial password (new accounts only)"/><PasswordField fx:id="userPassword" promptText="10+ characters, maximum 72 UTF-8 bytes"/>
+<Label text="Account division"/><TextField fx:id="userDivision" promptText="Account division"/>
+<Label text="Username"/><TextField fx:id="username" promptText="Demo username" accessibleText="Demo username"/>
+                                        <Label text="Display name (not supplied by this backend)"/><TextField fx:id="userDisplayName" promptText="Demo display name" accessibleText="Demo display name"/>
+                                        <Label text="Role defined by the backend contract"/><ComboBox fx:id="userRole" promptText="Select a documented role" maxWidth="Infinity" accessibleText="Demo user role"/>
                                         <Label text="Office (optional, subject to backend rules)"/>
                                         <HBox spacing="10"><ComboBox fx:id="userOffice" promptText="No office selected" maxWidth="Infinity" HBox.hgrow="ALWAYS" accessibleText="Demo user office"/><Button text="No office" onAction="#clearUserOffice"/></HBox>
-                                        <Label text="Change reason (required to disable)"/><TextArea fx:id="userReason" prefRowCount="2" wrapText="true" accessibleText="Demo account change reason"/>
+                                        <Label text="Local note (not sent or recorded by this backend)"/><TextArea fx:id="userReason" prefRowCount="2" wrapText="true" accessibleText="Local account note"/>
                                         <HBox spacing="10"><ComboBox fx:id="userIntent" maxWidth="Infinity" HBox.hgrow="ALWAYS"/><Button fx:id="checkUserButton" text="Check user fields" onAction="#checkUser" disable="true"/><Button text="Clear draft" onAction="#clearUserForm"/></HBox>
                                         <FlowPane hgap="10" vgap="10">
-                                            <Button fx:id="createUserButton" text="Create demo user" onAction="#createUser" disable="true" styleClass="primary-button"/>
-                                            <Button fx:id="updateUserButton" text="Update selected demo" onAction="#updateUser" disable="true"/>
-                                            <Button fx:id="disableUserButton" text="Disable selected demo" onAction="#disableUser" disable="true" styleClass="danger-button"/>
+                                            <Button fx:id="createUserButton" text="Create user" onAction="#createUser" disable="true" styleClass="primary-button"/>
+                                            <Button fx:id="updateUserButton" text="Edit user (unsupported)" onAction="#updateUser" disable="true"/>
+                                            <Button fx:id="activateUserButton" text="Activate selected user" onAction="#activateUser"/>
+<Button fx:id="disableUserButton" text="Deactivate selected user" onAction="#disableUser" disable="true" styleClass="danger-button"/>
                                         </FlowPane>
-                                        <Label text="No password or credential provisioning is simulated. Submissions require a coordinated administrative backend contract." wrapText="true" styleClass="muted"/>
+                                        <Label text="Create provisions a real account. Activation changes apply to the selected account; Administrator accounts and accounts with active assignments are protected by the server." wrapText="true" styleClass="muted"/>
                                     </VBox>
                                 </VBox>
                             </ScrollPane>
@@ -112,22 +116,23 @@
                             <ScrollPane fx:id="officesScroll" fitToWidth="true">
                                 <VBox spacing="16" styleClass="section">
                                     <Label text="GN and DS office management" styleClass="section-title"/>
-                                    <Label text="Office types and codes must come from the server catalogue. Only server-identified demo offices can be edited here." wrapText="true" styleClass="muted"/>
+                                    <Label text="GN and DS are the documented office kinds. GN offices require a DS parent. Structural editing and archiving are unsupported." wrapText="true" styleClass="muted"/>
                                     <TableView fx:id="officesTable" prefHeight="220"><columns>
                                         <TableColumn fx:id="officeIdColumn" text="Office ID" prefWidth="170"/><TableColumn fx:id="officeNameColumn" text="Office name" prefWidth="215"/>
                                         <TableColumn fx:id="officeKindColumn" text="Type" prefWidth="170"/><TableColumn fx:id="officeAreaColumn" text="Area / division" prefWidth="180"/>
                                         <TableColumn fx:id="officeStateColumn" text="State" prefWidth="150"/><TableColumn fx:id="demoOfficeColumn" text="Management scope" prefWidth="190"/>
                                     </columns></TableView>
                                     <VBox fx:id="officeForm" spacing="12" styleClass="card">
-                                        <Label text="Demo office draft" styleClass="subheading"/>
+                                        <Label text="New office / rename" styleClass="subheading"/>
                                         <Label text="Office name"/><TextField fx:id="officeName" promptText="Demo office name" accessibleText="Demo office name"/>
-                                        <Label text="Type from server catalogue"/><ComboBox fx:id="officeKind" promptText="Awaiting GN / DS type catalogue" maxWidth="Infinity" accessibleText="Demo office type"/>
+                                        <Label text="Office kind defined by the backend contract"/><ComboBox fx:id="officeKind" promptText="Select GN or DS" maxWidth="Infinity" accessibleText="Demo office type"/>
                                         <Label text="Area or division"/><TextField fx:id="officeArea" promptText="Office area or division" accessibleText="Demo office area"/>
-                                        <Label text="Change reason (required to archive)"/><TextArea fx:id="officeReason" prefRowCount="2" wrapText="true" accessibleText="Demo office change reason"/>
+                                        <Label text="Parent DS office UUID (new GN offices only)"/><TextField fx:id="officeParentId" promptText="Required DS parent for a GN office"/>
+<Label text="Change reason (required to archive)"/><TextArea fx:id="officeReason" prefRowCount="2" wrapText="true" accessibleText="Demo office change reason"/>
                                         <HBox spacing="10"><ComboBox fx:id="officeIntent" maxWidth="Infinity" HBox.hgrow="ALWAYS"/><Button fx:id="checkOfficeButton" text="Check office fields" onAction="#checkOffice" disable="true"/><Button text="Clear draft" onAction="#clearOfficeForm"/></HBox>
                                         <FlowPane hgap="10" vgap="10">
-                                            <Button fx:id="createOfficeButton" text="Create demo office" onAction="#createOffice" disable="true" styleClass="primary-button"/>
-                                            <Button fx:id="updateOfficeButton" text="Update selected demo" onAction="#updateOffice" disable="true"/>
+                                            <Button fx:id="createOfficeButton" text="Create office" onAction="#createOffice" disable="true" styleClass="primary-button"/>
+                                            <Button fx:id="updateOfficeButton" text="Rename selected office" onAction="#updateOffice" disable="true"/>
                                             <Button fx:id="archiveOfficeButton" text="Archive selected demo" onAction="#archiveOffice" disable="true" styleClass="danger-button"/>
                                         </FlowPane>
                                         <Label text="No administrative change or audit entry is generated locally. Live office services remain pending." wrapText="true" styleClass="muted"/>

@@ -33,8 +33,9 @@
                 <Circle fx:id="connectionDot" radius="5" styleClass="offline"/>
                 <Label fx:id="connectionLabel" text="Not connected"/>
             </HBox>
-            <Label fx:id="feedback" text="Some services are awaiting availability on your server. Requests and messages are never saved as successful until confirmed by the server."
+            <Label fx:id="feedback" text="Request records, messages and document results come from the authenticated server. Refresh before retrying an uncertain operation."
                    wrapText="true" maxWidth="Infinity" styleClass="notice"/>
+            <Label fx:id="refreshFeedback" wrapText="true" maxWidth="Infinity" styleClass="muted"/>
             <HBox fx:id="activityRow" spacing="10" alignment="CENTER_LEFT">
                 <ProgressIndicator fx:id="busyIndicator" visible="false" prefWidth="20" prefHeight="20"/>
                 <Label fx:id="activityLabel" visible="false" styleClass="muted"/>
@@ -74,9 +75,12 @@
                                 <VBox spacing="14" styleClass="section">
                                     <Label text="New service request" styleClass="section-title"/>
                                     <Label text="Request type"/>
-                                    <TextField fx:id="requestType" promptText="Request type supplied by your local office" accessibleText="Request type"/>
+                                    <TextField fx:id="requestType" promptText="RESIDENCE, INCOME, CHARACTER or OTHER" accessibleText="Request type"/>
+                                    <Label text="Request title"/>
+                                    <TextField fx:id="requestTitle" promptText="A short title (maximum 160 characters)" accessibleText="Request title"/>
                                     <Label text="GN division"/>
-                                    <TextField fx:id="division" promptText="Enter your GN division" accessibleText="GN division"/>
+                                    <TextField fx:id="division" promptText="Your registered GN division" accessibleText="Registered GN division"/>
+                                    <Label text="Requests use the GN division registered to your account." wrapText="true" styleClass="muted"/>
                                     <Label text="Description"/>
                                     <TextArea fx:id="description" promptText="Explain what you need and include any relevant information." wrapText="true" prefRowCount="4" accessibleText="Request description"/>
                                     <VBox spacing="10" styleClass="card">
@@ -85,12 +89,13 @@
                                         <HBox spacing="10">
                                             <Button fx:id="chooseAttachmentButton" text="Choose file…" onAction="#chooseAttachment"/>
                                             <Button fx:id="removeAttachmentButton" text="Remove" onAction="#removeAttachment" disable="true"/>
-                                            <Button text="Upload attachment" disable="true"/>
+                                            <Button fx:id="uploadDocumentButton" text="Upload to selected request" onAction="#uploadDocument"/>
                                         </HBox>
+                                        <Label text="Uploads to existing requests must be completed before final approval or rejection." wrapText="true" styleClass="muted"/>
                                         <ProgressBar fx:id="transferProgress" progress="0" maxWidth="Infinity"/>
                                         <Label fx:id="transferLabel" text="No transfer started" wrapText="true" styleClass="muted"/>
                                     </VBox>
-                                    <Label text="Submission and document upload are not available on this server yet. Selecting a document does not upload it." wrapText="true" styleClass="muted"/>
+                                    <Label text="Requests are submitted to the server. Document selection is local until an authorized upload starts." wrapText="true" styleClass="muted"/>
                                     <HBox spacing="10">
                                         <Button fx:id="validateButton" text="Check form" onAction="#validateDraft"/>
                                         <Button fx:id="submitButton" text="Submit request" onAction="#submitRequest" disable="true" styleClass="primary-button"/>
@@ -101,7 +106,9 @@
                         <Tab fx:id="requestsTab" text="My requests">
                             <VBox spacing="12" styleClass="section">
                                 <Label text="My requests" styleClass="section-title"/>
-                                <Label text="Select a request to view its details, status history and messages. Request loading awaits availability on your server." wrapText="true" styleClass="muted"/>
+<Button text="Refresh from server" onAction="#refreshFromServer"/>
+<Button fx:id="resubmitButton" text="Resubmit selected request using corrected title and description" onAction="#resubmitCorrection"/>
+                                <Label text="Select a request to view its details, status history and messages. Use Refresh to retrieve current server records." wrapText="true" styleClass="muted"/>
                                 <TableView fx:id="requestsTable" prefHeight="210" VBox.vgrow="SOMETIMES">
                                     <columns>
                                         <TableColumn fx:id="idColumn" text="Request ID" prefWidth="160"/>
@@ -135,8 +142,10 @@
                         <Tab fx:id="documentsTab" text="Documents">
                             <ScrollPane fitToWidth="true">
                                 <VBox spacing="16" styleClass="section">
-                                    <Label text="Supporting documents" styleClass="section-title"/>
-                                    <Label text="Manage the optional document for your current request draft. Files remain on your device until an authorized upload is available." wrapText="true" styleClass="muted"/>
+                                    <Label text="Supporting documents" styleClass="section-title"/><Label text="Select a request in My requests to see its stored documents." wrapText="true"/>
+<ComboBox fx:id="documentPicker" promptText="No authorized document selected" maxWidth="Infinity"/>
+<HBox spacing="10"><Button text="Refresh documents" onAction="#refreshFromServer"/><Button fx:id="downloadDocumentButton" text="Download selected document" onAction="#downloadDocument"/><Button fx:id="documentUploadButton" text="Upload selected PDF to request" onAction="#uploadDocument"/></HBox>
+                                    <Label text="Upload PDFs before final approval or rejection. Closed requests allow existing documents to be viewed and downloaded." wrapText="true" styleClass="muted"/>
                                     <VBox spacing="14" styleClass="card">
                                         <Label text="Current draft attachment" styleClass="subheading"/>
                                         <Label fx:id="documentLabel" text="No attachment selected" wrapText="true"/>

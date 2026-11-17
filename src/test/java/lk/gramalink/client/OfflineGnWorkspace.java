@@ -11,6 +11,11 @@ final class OfflineGnWorkspace implements GnWorkspace, AutoCloseable {
     private GnGateway.Listener listener = new GnGateway.Listener() { };
     boolean available = true;
     boolean exerciseActions;
+    boolean productionRules;
+    public boolean permits(GnData.ActionKind kind, GnData.RequestRow row) {
+        return supports(kind) && (!productionRules || GnProtocol.productionBackend().permits(kind, row));
+    }
+    void loading(boolean value) { listener.onLoading(value); }
     int operations;
     GnData.Action lastAction;
     CompletableFuture<Message> nextReply;

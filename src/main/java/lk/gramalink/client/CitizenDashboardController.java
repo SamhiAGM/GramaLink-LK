@@ -21,13 +21,15 @@ import javafx.util.StringConverter;
 
 /** FX controls and local drafts only. All server data comes through CitizenProtocol. */
 public final class CitizenDashboardController {
+    @FXML private ComboBox<CitizenData.Document> documentPicker;
+    @FXML private Button uploadDocumentButton,documentUploadButton,downloadDocumentButton,resubmitButton;
     @FXML private TabPane sections;
     @FXML private Tab overviewTab, newRequestTab, requestsTab, notificationsTab, documentsTab, messagesTab, profileTab;
     @FXML private VBox workspace;
-    @FXML private Label citizenName, connectionLabel, feedback, requestCount, notificationCount;
+    @FXML private Label citizenName, connectionLabel, feedback, refreshFeedback, requestCount, notificationCount;
     @FXML private Label requestCountCaption, notificationCountCaption, overviewHint;
     @FXML private Circle connectionDot;
-    @FXML private TextField requestType, division;
+    @FXML private TextField requestType, division, requestTitle;
     @FXML private TextArea description, messageText, conversationText;
     @FXML private Button submitButton, sendButton, conversationSendButton, chooseAttachmentButton, removeAttachmentButton, validateButton;
     @FXML private Button documentChooseButton, documentRemoveButton;
@@ -42,6 +44,7 @@ public final class CitizenDashboardController {
     @FXML private ListView<String> timeline, messages, notifications, conversation;
     private final Map<String, CitizenData.Details> details = new HashMap<>();
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm").withZone(ZoneId.of("Asia/Colombo"));
+    private boolean loading;
     private long bindingEpoch;
     private CitizenWorkspace gateway;
     private Runnable returnToLogin;
@@ -65,6 +68,7 @@ public final class CitizenDashboardController {
         for (ListView<String> list : List.of(timeline, messages, notifications, conversation)) wrapCells(list);
         sections.getSelectionModel().selectedIndexProperty().addListener((observable, old, selected) -> highlightNavigation(selected.intValue()));
         highlightNavigation(sections.getSelectionModel().getSelectedIndex());
+        documentPicker.valueProperty().addListener((o,old,value)->refreshActions());
         messageRequest.setConverter(new StringConverter<>() {
             public String toString(CitizenData.RequestRow row) { return row == null ? "" : row.id() + " | " + row.type(); }
             public CitizenData.RequestRow fromString(String value) { throw new UnsupportedOperationException(); }
@@ -109,15 +113,23 @@ public final class CitizenDashboardController {
         citizenName.setText(identity.displayName());
         profileName.setText(identity.displayName());
         profileUserId.setText(identity.userId());
+        division.setEditable(!gateway.usesRegisteredDivision());
+        if (gateway.usesRegisteredDivision()) {
+            division.clear();
+            division.setPromptText("Loading your registered GN division...");
+        }
+        refreshFeedback.setText("");
         workspace.setDisable(false);
         setBusy(false, ""); status(true);
         refreshActions();
         gateway.setListener(new CitizenGateway.Listener() {
+            public void onLoading(boolean value){Platform.runLater(()->{if(bindingCurrent(epoch,gateway)){loading=value;setBusy(busy,value?"Refreshing server records...":"");}});}
             public void onRecovery(ClientReliability.State state) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) recovery(state); }); }
             public void onUpdate(CitizenData.Update update) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway) && gateway.isCitizenAuthorized()) apply(update); }); }
             public void onStatus(NetworkClient.Status value) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) status(value == NetworkClient.Status.CONNECTED && gateway.isCitizenAuthorized()); }); }
-            public void onError(String error) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) feedback.setText(error); }); }
+            public void onError(String error) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) refreshFeedback.setText(error); }); }
         });
+        gateway.refresh();
     }
 
     private void resetView() {
@@ -164,7 +176,15 @@ public final class CitizenDashboardController {
     }
     private void refreshActions() {
         boolean authorized = gateway != null && gateway.isCitizenAuthorized();
-        submitButton.setDisable(busy || !authorized || attachment != null || !gateway.supports(CitizenProtocol.Operation.CREATE_REQUEST));
+        boolean fileReady=authorized && !busy && gateway.supportsFiles() && requestsTable.getSelectionModel().getSelectedItem()!=null;
+        var selectedRequest=requestsTable.getSelectionModel().getSelectedItem();
+        boolean uploadsAllowed=selectedRequest!=null && ClientFiles.uploadsAllowed(selectedRequest.status());
+        uploadDocumentButton.setDisable(!fileReady || !uploadsAllowed || attachment==null);documentUploadButton.setDisable(uploadDocumentButton.isDisable());
+        String uploadHint=selectedRequest!=null && !uploadsAllowed ? "Uploads are not permitted for APPROVED or REJECTED requests. Existing documents can still be downloaded." : "Upload a PDF before final approval or rejection.";
+        uploadDocumentButton.setTooltip(new Tooltip(uploadHint));documentUploadButton.setTooltip(new Tooltip(uploadHint));
+        downloadDocumentButton.setDisable(!fileReady || documentPicker.getValue()==null);
+        resubmitButton.setDisable(!authorized || busy || !gateway.supportsCorrections() || requestsTable.getSelectionModel().getSelectedItem()==null);
+        submitButton.setDisable(busy || !authorized || (attachment != null && !gateway.supportsFiles()) || !gateway.supports(CitizenProtocol.Operation.CREATE_REQUEST));
         sendButton.setDisable(busy || !authorized || requestsTable.getSelectionModel().getSelectedItem() == null || !gateway.supports(CitizenProtocol.Operation.CHAT_MESSAGE));
         conversationSendButton.setDisable(sendButton.isDisable());
         chooseAttachmentButton.setDisable(busy || !authorized);
@@ -173,6 +193,7 @@ public final class CitizenDashboardController {
     }
 
     @FXML private void showOverview() { sections.getSelectionModel().select(overviewTab); }
+    @FXML private void refreshFromServer() { if (gateway != null) gateway.refresh(); }
     @FXML private void showNewRequest() { sections.getSelectionModel().select(newRequestTab); }
     @FXML private void showRequests() { sections.getSelectionModel().select(requestsTab); }
     @FXML private void showNotifications() { sections.getSelectionModel().select(notificationsTab); }
@@ -205,7 +226,7 @@ public final class CitizenDashboardController {
     }
 
     private CitizenData.Draft readDraft() {
-        return new CitizenData.Draft(requestType.getText(), division.getText(), description.getText(), attachment);
+        return new CitizenData.Draft(requestType.getText(), division.getText(), requestTitle.getText(), description.getText(), attachment);
     }
     @FXML private void validateDraft() {
         try {
@@ -221,6 +242,11 @@ public final class CitizenDashboardController {
             var draft = readDraft();
             complete(gateway.createRequest(draft), "Server reply");
         } catch (IllegalArgumentException | SecurityException error) { feedback.setText(error.getMessage()); }
+    }
+    @FXML private void resubmitCorrection() {
+        var row=requestsTable.getSelectionModel().getSelectedItem();
+        if(row==null){feedback.setText("Select the request needing correction, then enter replacement title and description in New request.");return;}
+        complete(gateway.resubmit(row.id(),row.version(),requestTitle.getText(),description.getText()),"Correction reply");
     }
     @FXML private void sendMessage() {
         sendText(messageText.getText());
@@ -240,10 +266,10 @@ public final class CitizenDashboardController {
             if (!bindingCurrent(epoch, source)) return;
             if (!source.isCitizenAuthorized()) { status(false); return; }
             setBusy(false, "");
-            // ACK does not add a local request, message, or successful application status.
+            // Only the operation-tagged backend creation result confirms persistence.
             feedback.setText(error != null ? operationError(error)
                     : label + ": " + (reply.type() == lk.gramalink.shared.MessageType.ERROR
-                    ? LoginService.describe(reply) : reply.type() + ". Awaiting authoritative request data."));
+                    ? LoginService.describe(reply) : submissionResult(reply)));
         }));
     }
 
@@ -291,7 +317,10 @@ public final class CitizenDashboardController {
     }
 
     private void apply(CitizenData.Update update) {
-        if (update instanceof CitizenData.Requests data) {
+        if (update instanceof CitizenData.Profile data) {
+            division.setText(data.division());
+            division.setEditable(false);
+        } else if (update instanceof CitizenData.Requests data) {
             String selectedId = Optional.ofNullable(requestsTable.getSelectionModel().getSelectedItem()).map(CitizenData.RequestRow::id).orElse(null);
             synchronizingSelection = true;
             requestsTable.getItems().setAll(data.rows());
@@ -328,11 +357,37 @@ public final class CitizenDashboardController {
         CitizenData.Details data = selected == null ? null : details.get(selected.id());
         detailsLabel.setText(selected == null ? "Select a request to see its details." : data == null
                 ? "Details for " + selected.id() + " have not been loaded from the server." : data.requestId() + "\n" + data.description());
+        String documentId=documentPicker.getValue()==null?null:documentPicker.getValue().id();
+        documentPicker.getItems().setAll(data==null?List.of():data.documents());
+        documentPicker.getItems().stream().filter(d->Objects.equals(d.id(),documentId)).findFirst().ifPresent(documentPicker::setValue);
         if (data != null) {
             timeline.getItems().setAll(data.timeline().stream().map(entry -> DATE.format(entry.at()) + "  |  " + entry.status() + "\n" + entry.description()).toList());
             messages.getItems().setAll(data.messages().stream().map(entry -> DATE.format(entry.at()) + "  |  " + entry.sender() + "\n" + entry.text()).toList());
         }
         refreshActions();
+    }
+
+    @FXML private void uploadDocument(){
+        var row=requestsTable.getSelectionModel().getSelectedItem();
+        if(row==null || attachment==null || !gateway.supportsFiles()){feedback.setText("Select an existing request and a PDF attachment first.");return;}
+        if(!ClientFiles.uploadsAllowed(row.status())){feedback.setText("Uploads are not permitted for APPROVED or REJECTED requests. No file was sent.");return;}
+        fileOperation(gateway.upload(row.id(),attachment.path()),true);
+    }
+    @FXML private void downloadDocument(){
+        var row=requestsTable.getSelectionModel().getSelectedItem();var document=documentPicker.getValue();
+        if(row==null || document==null || !gateway.supportsFiles()){feedback.setText("Select an existing request and an authorized document.");return;}
+        var chooser=new FileChooser();chooser.setTitle("Save verified download to a new file");chooser.setInitialFileName(document.fileName());
+        var file=chooser.showSaveDialog(documentPicker.getScene().getWindow());if(file==null)return;
+        fileOperation(gateway.download(row.id(),document.id(),file.toPath()),false);
+    }
+    private void fileOperation(CompletableFuture<?> future,boolean upload){
+        long epoch=bindingEpoch;var source=gateway;setBusy(true,"Transferring document...");
+        future.whenComplete((result,error)->Platform.runLater(()->{
+            if(!bindingCurrent(epoch,source))return;setBusy(false,"");if(!source.isCitizenAuthorized()){status(false);return;}
+            Throwable cause=error;while(cause instanceof CompletionException && cause.getCause()!=null)cause=cause.getCause();
+            String detail=cause!=null?cause.getMessage():upload?"STORED: backend confirmed document "+result:"Download checksum verified and saved: "+result;
+            feedback.setText(detail);transferLabel.setText(detail);documentProgressLabel.setText(detail);
+        }));
     }
     @FXML private void signOut() {
         bindingEpoch++; active = false; selectionVersion++;
@@ -343,15 +398,29 @@ public final class CitizenDashboardController {
 
     private void setBusy(boolean value, String text) {
         busy = value;
-        busyIndicator.setVisible(value);
-        activityLabel.setVisible(value);
-        activityLabel.setText(text);
+        busyIndicator.setVisible(value || loading);
+        activityLabel.setVisible(value || loading);
+        activityLabel.setText(value ? text : loading ? "Refreshing server records..." : "");
         refreshActions();
+    }
+
+    private static String submissionResult(Message reply) {
+        if (reply.type() == lk.gramalink.shared.MessageType.ACK
+                && "CREATE_REQUEST".equals(reply.payload().path("operation").asText())) {
+            String id = reply.payload().path("data").path("id").asText();
+            try {
+                java.util.UUID.fromString(id);
+                return "Request submitted. Request ID: " + id + ". Refresh My Requests to view it.";
+            } catch (IllegalArgumentException ignored) {
+                return "Creation reply is missing a valid request ID. Outcome is unconfirmed; refresh before retrying.";
+            }
+        }
+        return reply.type() + ". Awaiting authoritative request data.";
     }
 
     static String operationError(Throwable error) {
         while (error instanceof CompletionException && error.getCause() != null) error = error.getCause();
-        if (error instanceof TimeoutException) return "The server did not reply in time. Try again when connected.";
+        if (error instanceof TimeoutException) return "The server did not reply in time. Outcome is unconfirmed; reload authoritative records before submitting again.";
         if (error instanceof SecurityException) return "Citizen authorization expired. Return to sign in.";
         if (error instanceof UnsupportedOperationException) return "This service is not available on the server yet. Nothing was submitted.";
         if (error instanceof IllegalArgumentException) return error.getMessage();

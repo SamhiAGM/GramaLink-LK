@@ -12,7 +12,11 @@ public final class GnData {
             displayName = required(displayName, "A verified officer name is required.");
         }
     }
-    public record RequestRow(String id, String citizen, String type, Instant submittedAt, String status, String priority) { }
+    public record RequestRow(String id, String citizen, String type, Instant submittedAt, String status, String priority, Long version) {
+        public RequestRow(String id, String citizen, String type, Instant submittedAt, String status, String priority) {
+            this(id,citizen,type,submittedAt,status,priority,null);
+        }
+    }
     public record Document(String id, String fileName, String verificationStatus) { }
     public record History(Instant at, String status, String description) { }
     public record Chat(Instant at, String sender, String text) { }
@@ -26,13 +30,15 @@ public final class GnData {
         }
     }
     public enum ActionKind {
+        RECEIVE("Receive request"), REVIEW("Start review"), VERIFY_REQUEST("Verify request"),
         VERIFY_DOCUMENT("Verify document"), REQUEST_INFORMATION("Request more information"),
         FORWARD_TO_DS("Forward to DS"), REJECT_REQUEST("Reject request"), CHAT("Send message");
         private final String label;
         ActionKind(String label) { this.label = label; }
         @Override public String toString() { return label; }
     }
-    public record Action(ActionKind kind, String requestId, String documentId, String note) {
+    public record Action(ActionKind kind, String requestId, String documentId, String note, Long expectedVersion) {
+        public Action(ActionKind kind, String requestId, String documentId, String note) { this(kind,requestId,documentId,note,null); }
         public Action {
             Objects.requireNonNull(kind);
             requestId = required(requestId, "Select an assigned request first.");

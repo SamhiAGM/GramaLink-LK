@@ -1,3 +1,13 @@
+# Current production integration — 13 November 2026
+
+The production DS gateway now loads its authorized decision queue, details, history, documents, chat and notifications. APPROVE, REJECT and RETURN_TO_GN map to the existing STATUS_UPDATE actions APPROVE, REJECT and RETURN. expectedVersion is a numeric server value, never a locally incremented value. CONFLICT/FORBIDDEN and uncertain decisions require an authoritative reload; decisions are never automatically retried. PDF upload/download use the same authenticated connection.
+
+See [the current verification checklist](u07-u08-client-integration.md) for test results, startup and remaining limits.
+
+The following original implementation report is historical. Statements about missing backend authentication/contracts below describe the earlier preview phase and are superseded by this section and backend-contract.md.
+
+---
+
 # U04 DS Officer dashboard
 
 ## UI-ready components

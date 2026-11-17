@@ -5,7 +5,8 @@ import java.util.Optional;
 import java.util.concurrent.CompletableFuture;
 
 /** Package-local view port; DsGateway is the only production implementation. */
-interface DsWorkspace {
+interface DsWorkspace extends FileWorkspace {
+    default void refresh() { }
     void requireDsOfficer();
     boolean isDsAuthorized();
     Optional<DsData.Identity> identity();

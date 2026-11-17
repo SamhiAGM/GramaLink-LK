@@ -1,3 +1,13 @@
+# Current production integration — 13 November 2026
+
+The production GN gateway now loads the assigned inbox, request details/history/chat/documents and own notifications. The action selector sends RECEIVE, REVIEW, VERIFY, REQUEST_CORRECTION, FORWARD and REJECT with the current server version. VERIFY is explicitly request verification; the legacy document-ID verification control remains unavailable because the backend has no such operation. PDF upload and selected-document download use the shared client file adapter. Priority and citizen display names are not supplied; no values are invented.
+
+See [the current verification checklist](u07-u08-client-integration.md) for test results, startup and remaining limits.
+
+The following original implementation report is historical. Statements about missing backend authentication/contracts below describe the earlier preview phase and are superseded by this section and backend-contract.md.
+
+---
+
 # U03 GN Officer workspace
 
 ## UI-ready components

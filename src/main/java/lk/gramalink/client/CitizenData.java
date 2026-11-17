@@ -13,29 +13,43 @@ public final class CitizenData {
                 throw new IllegalArgumentException("A verified citizen identity is required.");
         }
     }
-    public record RequestRow(String id, String type, Instant submittedAt, String status) { }
+    public record RequestRow(String id, String type, Instant submittedAt, String status, Long version) {
+        public RequestRow(String id,String type,Instant submittedAt,String status){this(id,type,submittedAt,status,null);}
+    }
     public record StatusEntry(Instant at, String status, String description) { }
     public record ChatEntry(Instant at, String sender, String text) { }
     public record Notification(Instant at, String text, String requestId) { }
-    public record Details(String requestId, String description, List<StatusEntry> timeline, List<ChatEntry> messages) {
+    public record Document(String id,String fileName) { @Override public String toString(){return fileName+" | "+id;} }
+    public record Details(String requestId, String description, List<StatusEntry> timeline, List<ChatEntry> messages, List<Document> documents) {
+        public Details(String requestId,String description,List<StatusEntry> timeline,List<ChatEntry> messages){this(requestId,description,timeline,messages,List.of());}
         public Details {
+            documents=List.copyOf(documents);
             timeline = timeline.stream().sorted(Comparator.comparing(StatusEntry::at)).toList();
             messages = messages.stream().sorted(Comparator.comparing(ChatEntry::at)).toList();
         }
     }
     public record Attachment(Path path, String fileName, long totalBytes) { }
-    public record Draft(String type, String division, String description, Attachment attachment) {
+    public record Draft(String type, String division, String title, String description, Attachment attachment) {
+        /** Compatibility for isolated preview fixtures; production always supplies an explicit title. */
+        public Draft(String type, String division, String description, Attachment attachment) {
+            this(type, division, description, description, attachment);
+        }
         public Draft {
             type = required(type, "Choose or enter a request type.");
             division = required(division, "Enter your GN division.");
+            title = required(title, "Enter a request title.");
             description = required(description, "Describe your request.");
+            if (title.length() > 160 || description.length() > 5000 || division.length() > 80)
+                throw new IllegalArgumentException("Title: maximum 160 characters; description: 5000; division: 80.");
         }
         private static String required(String value, String error) {
             if (value == null || value.isBlank()) throw new IllegalArgumentException(error);
             return value.strip();
         }
     }
-    public sealed interface Update permits Requests, RequestDetails, Notifications, TransferProgress { }
+    public sealed interface Update permits Profile, Requests, RequestDetails, Notifications, TransferProgress { }
+    /** Registered scope returned by ME, never a user-entered routing destination. */
+    public record Profile(String division) implements Update { }
     public record Requests(List<RequestRow> rows) implements Update {
         public Requests { rows = List.copyOf(rows); }
     }

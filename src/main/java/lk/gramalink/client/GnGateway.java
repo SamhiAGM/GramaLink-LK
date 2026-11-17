@@ -11,6 +11,8 @@ import java.util.concurrent.atomic.AtomicLong;
 /** GN operations on the same NetworkClient used to log in. No role is inferred locally. */
 public final class GnGateway implements GnWorkspace, AutoCloseable {
     public interface Listener {
+        default void onLoading(boolean loading) { }
+        default void onFileProgress(FileTransferProgress.Snapshot snapshot) { }
         default void onRecovery(ClientReliability.State state) { }
         default void onUpdate(GnData.Update update) { }
         default void onStatus(NetworkClient.Status status) { }
@@ -18,6 +20,17 @@ public final class GnGateway implements GnWorkspace, AutoCloseable {
     }
     private final Object authorizationLock = new Object();
     private final AtomicLong sessionEpoch = new AtomicLong();
+    private volatile ClientFiles files;
+    void bindFiles(ClientFiles files){this.files=files;}
+    @Override public boolean supportsFiles(){return protocol.loadsBackend() && isGnAuthorized() && files!=null;}
+    @Override public CompletableFuture<String> upload(String requestId,java.nio.file.Path path){
+        if(!supportsFiles())return CompletableFuture.failedFuture(new SecurityException("Fresh file authorization is required."));
+        return files.upload(requestId,path).thenApply(id->{refresh();return id;});
+    }
+    @Override public CompletableFuture<java.nio.file.Path> download(String requestId,String documentId,java.nio.file.Path destination){
+        if(!supportsFiles())return CompletableFuture.failedFuture(new SecurityException("Fresh file authorization is required."));
+        return files.download(requestId,documentId,destination);
+    }
     private final NetworkClient client;
     private final GnProtocol protocol;
     private final Executor callbacks;
@@ -52,6 +65,9 @@ public final class GnGateway implements GnWorkspace, AutoCloseable {
         }
         publish(target -> target.onStatus(status));
     }
+    void transferProgress(FileTransferProgress.Snapshot snapshot){
+        long epoch=sessionEpoch.get();publish(epoch,true,target->target.onFileProgress(snapshot));
+    }
     void transportError(String message) { publish(target -> target.onError(message)); }
     void recoveryState(ClientReliability.State state) {
         if (state != ClientReliability.State.ONLINE) {
@@ -62,6 +78,8 @@ public final class GnGateway implements GnWorkspace, AutoCloseable {
     void incoming(Message message) {
         if (!isGnAuthorized()) return;
         final long epoch = sessionEpoch.get();
+        if (protocol.loadsBackend() && message.correlationId() == null && java.util.Set.of(MessageType.NEW_REQUEST,
+                MessageType.REQUEST_UPDATED, MessageType.NOTIFICATION, MessageType.CHAT_MESSAGE).contains(message.type())) { refresh(); return; }
         if (message.type() == MessageType.ACK) return; // Transport receipt is not persistence.
         if (message.type() == MessageType.ERROR) {
             publish(epoch, true, target -> target.onError(LoginService.describe(message))); return;
@@ -81,7 +99,39 @@ public final class GnGateway implements GnWorkspace, AutoCloseable {
     }
     public Optional<GnData.Identity> identity() { return isGnAuthorized() ? Optional.ofNullable(identity) : Optional.empty(); }
     public boolean supports(GnData.ActionKind action) { return isGnAuthorized() && protocol.supports(action); }
+    @Override public boolean permits(GnData.ActionKind action, GnData.RequestRow row) {
+        return isGnAuthorized() && protocol.permits(action, row)
+                && (!protocol.loadsBackend() || action == GnData.ActionKind.CHAT
+                    || (row != null && row.version() != null && Objects.equals(revisions.get(row.id()), row.version())));
+    }
     public void setListener(Listener listener) { this.listener = Objects.requireNonNull(listener); }
+    private final java.util.concurrent.atomic.AtomicBoolean refreshQueued = new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicBoolean refreshDirty = new java.util.concurrent.atomic.AtomicBoolean();
+    private final Map<String,Long> revisions = new ConcurrentHashMap<>();
+    @Override public void refresh() {
+        if (!protocol.loadsBackend() || !isGnAuthorized()) return;
+        refreshDirty.set(true); if (!refreshQueued.compareAndSet(false,true)) return;
+        long epoch=sessionEpoch.get();
+        publish(epoch,true,target->target.onLoading(true));
+        task(() -> {
+            try {
+                int passes=0;
+                do {
+                    refreshDirty.set(false);
+                    var queries=new BackendQueries(client, () -> { requireEpoch(epoch); requireGnOfficer(); });
+                    var updates=queries.officer("GN",identity().orElseThrow().userId());
+                    requireEpoch(epoch); requireGnOfficer();
+                    for(Object update:updates) {
+                        if(update instanceof GnData.Requests snapshot) { revisions.clear(); snapshot.rows().forEach(r -> revisions.put(r.id(),r.version())); }
+                        publish(epoch,true,target -> target.onUpdate((GnData.Update)update));
+                    }
+                } while(++passes<2 && refreshDirty.get() && isGnAuthorized() && sessionEpoch.get()==epoch);
+            } catch(IOException error){ publish(epoch,true,target -> target.onError(error.getMessage())); }
+            finally { publish(epoch,true,target->target.onLoading(false)); refreshQueued.set(false); if(refreshDirty.get() && isGnAuthorized()) refresh(); }
+            return null;
+        });
+    }
+
     public CompletableFuture<Message> perform(GnData.Action action) {
         Objects.requireNonNull(action);
         if (!isGnAuthorized()) return CompletableFuture.failedFuture(new SecurityException("GN Officer authorization is required."));
@@ -90,6 +140,9 @@ public final class GnGateway implements GnWorkspace, AutoCloseable {
         return task(() -> {
             requireEpoch(commandEpoch);
             requireGnOfficer();
+            if(protocol.loadsBackend() && action.kind()!=GnData.ActionKind.CHAT
+                    && (action.expectedVersion()==null || !Objects.equals(revisions.get(action.requestId()),action.expectedVersion())))
+                throw new IllegalArgumentException("Reload the current assigned request before deciding.");
             Message outbound = protocol.encode(action);
             // This is a permitted integration boundary, not a claim that these operations work today.
             MessageType expected = action.kind() == GnData.ActionKind.CHAT ? MessageType.CHAT_MESSAGE : MessageType.STATUS_UPDATE;
@@ -97,7 +150,7 @@ public final class GnGateway implements GnWorkspace, AutoCloseable {
             requireGnOfficer();
             requireEpoch(commandEpoch);
             return client.request(outbound, Duration.ofSeconds(10));
-        }).thenCompose(reply -> reply);
+        }).thenCompose(reply -> reply).whenComplete((reply,error) -> { if(protocol.loadsBackend()) { revisions.remove(action.requestId()); refresh(); } });
     }
     public CompletableFuture<Void> disconnect() {
         synchronized (authorizationLock) { sessionEpoch.incrementAndGet(); identity = null; }

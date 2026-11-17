@@ -100,7 +100,7 @@ class U07UiBindingTest {
         try (OfflineCitizenWorkspace first = new OfflineCitizenWorkspace(); OfflineCitizenWorkspace second = new OfflineCitizenWorkspace()) {
             first.exerciseAcknowledgement = true; first.nextReply = new CompletableFuture<>(); View view = load(0, first);
             fx(() -> {
-                view.<TextField>node("requestType").setText("Fixture type"); view.<TextField>node("division").setText("Fixture division"); view.<TextArea>node("description").setText("Fixture draft");
+                view.<TextField>node("requestType").setText("Fixture type"); view.<TextField>node("division").setText("Fixture division"); view.<TextField>node("requestTitle").setText("Fixture title"); view.<TextArea>node("description").setText("Fixture draft");
                 view.<Button>node("submitButton").fire(); assertTrue(view.<ProgressIndicator>node("busyIndicator").isVisible());
                 attach(0, view, second); view.<Label>node("feedback").setText("New session marker"); assertFalse(view.<ProgressIndicator>node("busyIndicator").isVisible()); return null;
             });

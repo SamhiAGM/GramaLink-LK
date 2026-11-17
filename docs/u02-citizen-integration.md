@@ -1,3 +1,13 @@
+# Current production integration — 13 November 2026
+
+The production Citizen adapter now maps CREATE_REQUEST (including the mandatory title), CHAT_MESSAGE and versioned RESUBMIT. Initial attachment submission creates the request first, then negotiates the PDF upload; a file failure does not undo a committed request. Refresh retrieves ME, every LIST_REQUESTS page, GET_REQUEST, history, chat, documents and the current user's notifications. Only complete authorized query results populate the workspace. Statistics are explicitly counts of retrieved own requests, not global statistics.
+
+See [the current verification checklist](u07-u08-client-integration.md) for test results, startup and remaining limits.
+
+The following original implementation report is historical. Statements about missing backend authentication/contracts below describe the earlier preview phase and are superseded by this section and backend-contract.md.
+
+---
+
 # U02 Citizen workspace integration
 
 The FXML workspace includes seven sections: Dashboard, New Request, My Requests,

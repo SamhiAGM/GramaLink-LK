@@ -106,7 +106,8 @@ class LoginServiceTest {
                 var claims = JsonNodeFactory.instance.objectNode().put("role", "CITIZEN").put("userId", "claimed");
                 JsonUtil.writeMessage(output, new Message(MessageType.LOGIN_OK, "unsolicited", "unverified", claims));
                 JsonUtil.writeMessage(output, new Message(MessageType.LOGIN_OK, login.correlationId(), "unverified", claims));
-                assertEquals(MessageType.LOGIN_OK, pending.get(3, TimeUnit.SECONDS).type());
+                ExecutionException error = assertThrows(ExecutionException.class, () -> pending.get(3, TimeUnit.SECONDS));
+                assertInstanceOf(SecurityException.class, error.getCause());
                 assertTrue(service.citizenGateway().isEmpty(), "An unknown auth payload must never unlock the dashboard");
                 assertTrue(service.gnGateway().isEmpty(), "A Citizen claim must not unlock the GN workspace either");
             }
@@ -123,7 +124,8 @@ class LoginServiceTest {
                 Message login = JsonUtil.readMessage(new DataInputStream(peer.getInputStream()));
                 JsonUtil.writeMessage(new DataOutputStream(peer.getOutputStream()), new Message(MessageType.LOGIN_OK, login.correlationId(), "unverified",
                         JsonNodeFactory.instance.objectNode().put("role", "GN_OFFICER").put("userId", "claimed-officer")));
-                pending.get(3, TimeUnit.SECONDS);
+                assertInstanceOf(SecurityException.class,
+                        assertThrows(ExecutionException.class, () -> pending.get(3, TimeUnit.SECONDS)).getCause());
                 assertTrue(service.gnGateway().isEmpty());
                 assertTrue(service.citizenGateway().isEmpty());
             }
@@ -138,7 +140,8 @@ class LoginServiceTest {
                 peer.setSoTimeout(3000); Message login = JsonUtil.readMessage(new DataInputStream(peer.getInputStream()));
                 JsonUtil.writeMessage(new DataOutputStream(peer.getOutputStream()), new Message(MessageType.LOGIN_OK, login.correlationId(), "unverified",
                         JsonNodeFactory.instance.objectNode().put("role", "DS_OFFICER").put("userId", "claimed-ds")));
-                pending.get(3, TimeUnit.SECONDS);
+                assertInstanceOf(SecurityException.class,
+                        assertThrows(ExecutionException.class, () -> pending.get(3, TimeUnit.SECONDS)).getCause());
                 assertTrue(service.dsGateway().isEmpty()); assertTrue(service.gnGateway().isEmpty()); assertTrue(service.citizenGateway().isEmpty());
             }
         }
@@ -151,7 +154,8 @@ class LoginServiceTest {
                 peer.setSoTimeout(3000); Message login = JsonUtil.readMessage(new DataInputStream(peer.getInputStream()));
                 JsonUtil.writeMessage(new DataOutputStream(peer.getOutputStream()), new Message(MessageType.LOGIN_OK, login.correlationId(), "unverified",
                         JsonNodeFactory.instance.objectNode().put("role", "ADMINISTRATOR").put("userId", "claimed-admin")));
-                pending.get(3, TimeUnit.SECONDS);
+                assertInstanceOf(SecurityException.class,
+                        assertThrows(ExecutionException.class, () -> pending.get(3, TimeUnit.SECONDS)).getCause());
                 assertTrue(service.adminGateway().isEmpty()); assertTrue(service.citizenGateway().isEmpty()); assertTrue(service.gnGateway().isEmpty()); assertTrue(service.dsGateway().isEmpty());
             }
         }

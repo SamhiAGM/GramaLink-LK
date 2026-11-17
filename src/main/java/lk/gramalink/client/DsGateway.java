@@ -11,6 +11,8 @@ import java.util.concurrent.atomic.AtomicLong;
 /** DS operations reuse the authenticated login socket; the server owns every final permission/concurrency decision. */
 public final class DsGateway implements DsWorkspace, AutoCloseable {
     public interface Listener {
+        default void onLoading(boolean loading) { }
+        default void onFileProgress(FileTransferProgress.Snapshot snapshot) { }
         default void onRecovery(ClientReliability.State state) { }
         default void onUpdate(DsData.Update update) { }
         default void onStatus(NetworkClient.Status status) { }
@@ -18,6 +20,17 @@ public final class DsGateway implements DsWorkspace, AutoCloseable {
     }
     private final Object authorizationLock = new Object();
     private final AtomicLong sessionEpoch = new AtomicLong();
+    private volatile ClientFiles files;
+    void bindFiles(ClientFiles files){this.files=files;}
+    @Override public boolean supportsFiles(){return protocol.loadsBackend() && isDsAuthorized() && files!=null;}
+    @Override public CompletableFuture<String> upload(String requestId,java.nio.file.Path path){
+        if(!supportsFiles())return CompletableFuture.failedFuture(new SecurityException("Fresh file authorization is required."));
+        return files.upload(requestId,path).thenApply(id->{refresh();return id;});
+    }
+    @Override public CompletableFuture<java.nio.file.Path> download(String requestId,String documentId,java.nio.file.Path destination){
+        if(!supportsFiles())return CompletableFuture.failedFuture(new SecurityException("Fresh file authorization is required."));
+        return files.download(requestId,documentId,destination);
+    }
     private final NetworkClient client;
     private final DsProtocol protocol;
     private final Executor callbacks;
@@ -55,6 +68,9 @@ public final class DsGateway implements DsWorkspace, AutoCloseable {
         if (!connected) synchronized (stateLock) { requests.clear(); refreshRequired.clear(); }
         publish(target -> target.onStatus(status));
     }
+    void transferProgress(FileTransferProgress.Snapshot snapshot){
+        long epoch=sessionEpoch.get();publish(epoch,true,target->target.onFileProgress(snapshot));
+    }
     void transportError(String message) { publish(target -> target.onError(message)); }
     void recoveryState(ClientReliability.State state) {
         if (state != ClientReliability.State.ONLINE) {
@@ -66,6 +82,8 @@ public final class DsGateway implements DsWorkspace, AutoCloseable {
     void incoming(Message message) {
         if (!isDsAuthorized()) return;
         final long epoch = sessionEpoch.get();
+        if (protocol.loadsBackend() && message.correlationId() == null && java.util.Set.of(MessageType.NEW_REQUEST,
+                MessageType.REQUEST_UPDATED, MessageType.NOTIFICATION, MessageType.CHAT_MESSAGE).contains(message.type())) { refresh(); return; }
         if (message.type() == MessageType.ACK) return; // Transport receipt is not persistence.
         if (message.type() == MessageType.ERROR) {
             publish(epoch, true, target -> target.onError(LoginService.describe(message))); return;
@@ -98,6 +116,34 @@ public final class DsGateway implements DsWorkspace, AutoCloseable {
     public boolean supports(DsData.ActionKind kind) { return isDsAuthorized() && protocol.supports(kind); }
     public boolean requiresVersion(DsData.ActionKind kind) { return protocol.requiresVersion(kind); }
     public void setListener(Listener listener) { this.listener = Objects.requireNonNull(listener); }
+    private final java.util.concurrent.atomic.AtomicBoolean refreshQueued = new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicBoolean refreshDirty = new java.util.concurrent.atomic.AtomicBoolean();
+    @Override public void refresh() {
+        if (!protocol.loadsBackend() || !isDsAuthorized()) return;
+        refreshDirty.set(true); if (!refreshQueued.compareAndSet(false,true)) return;
+        long epoch=sessionEpoch.get();
+        publish(epoch,true,target->target.onLoading(true));
+        task(() -> {
+            try {
+                int passes=0;
+                do {
+                    refreshDirty.set(false);
+                    var queries=new BackendQueries(client, () -> { requireEpoch(epoch); requireDsOfficer(); });
+                    var updates=queries.officer("DS",identity().orElseThrow().userId());
+                    requireEpoch(epoch); requireDsOfficer();
+                    for(Object update:updates) {
+                        if(update instanceof DsData.Requests snapshot) synchronized(stateLock) {
+                            requests.clear(); snapshot.rows().forEach(r -> requests.put(r.id(),r)); refreshRequired.clear();
+                        }
+                        publish(epoch,true,target -> target.onUpdate((DsData.Update)update));
+                    }
+                } while(++passes<2 && refreshDirty.get() && isDsAuthorized() && sessionEpoch.get()==epoch);
+            } catch(IOException error){ publish(epoch,true,target -> target.onError(error.getMessage())); }
+            finally { publish(epoch,true,target->target.onLoading(false)); refreshQueued.set(false); if(refreshDirty.get() && isDsAuthorized()) refresh(); }
+            return null;
+        });
+    }
+
     public CompletableFuture<Message> perform(DsData.Action action) {
         Objects.requireNonNull(action);
         if (!isDsAuthorized()) return CompletableFuture.failedFuture(new SecurityException("DS Officer authorization is required."));
@@ -118,7 +164,10 @@ public final class DsGateway implements DsWorkspace, AutoCloseable {
                 if (code.equals("CONFLICT") || code.equals("FORBIDDEN")) synchronized (stateLock) { refreshRequired.add(action.requestId()); }
             }
             return reply;
-        }));
+        })).whenComplete((reply,error) -> { if(protocol.loadsBackend()) {
+            if(error!=null) synchronized(stateLock){refreshRequired.add(action.requestId());}
+            refresh();
+        } });
     }
     private void validateCurrent(DsData.Action action) {
         requireDsOfficer();

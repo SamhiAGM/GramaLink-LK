@@ -42,6 +42,38 @@ class AdminDashboardUiTest {
         ui.<TextField>node("officeName").setText("Local unsent office"); ui.<TextField>node("officeArea").setText("Local sample area");
         ui.<ComboBox<AdminData.Choice>>node("officeKind").getSelectionModel().selectFirst();
     }
+    @Test void productionChecksUseWireValidationAndSelectionsClearStaleDrafts() throws Exception {
+        try(Ui ui=load(false)) {
+            ui.fixture.backendContract=true;ui.fixture.exerciseActions=true;
+            var citizen=new AdminData.Choice("CITIZEN","CITIZEN");var administrator=new AdminData.Choice("ADMIN","ADMIN");var ds=new AdminData.Choice("DS","DS");
+            fx(()->{ui.controller().attach(ui.fixture,()->{});return null;});
+            ui.fixture.emit(new AdminData.Catalogues(List.of(citizen,administrator),List.of(ds,new AdminData.Choice("GN","GN"))));
+            ui.fixture.emit(new AdminData.Users(List.of(
+                    new AdminData.UserRow(UUID.randomUUID().toString(),"synthetic.citizen",null,citizen,null,"Active",false),
+                    new AdminData.UserRow(UUID.randomUUID().toString(),"synthetic.admin",null,administrator,null,"Active",false))));
+            ui.fixture.emit(new AdminData.Offices(List.of(new AdminData.OfficeRow(UUID.randomUUID().toString(),"Synthetic DS",ds,"TEST",null,false))));
+            fx(()->{
+                ui.<TextField>node("username").setText("synthetic.new");ui.<ComboBox<AdminData.Choice>>node("userRole").setValue(citizen);
+                assertEquals(AdminData.Operation.CREATE_DEMO_USER,ui.<ComboBox<AdminData.Operation>>node("userIntent").getValue());
+                assertEquals(AdminData.Operation.CREATE_DEMO_OFFICE,ui.<ComboBox<AdminData.Operation>>node("officeIntent").getValue());
+                ui.<Button>node("checkUserButton").fire();assertTrue(ui.<Label>node("feedback").getText().contains("password"));
+                ui.<PasswordField>node("userPassword").setText("SyntheticPass123!");
+                ui.<Button>node("checkUserButton").fire();assertTrue(ui.<Label>node("feedback").getText().contains("division"));
+                ui.<TextField>node("userDivision").setText("TEST");ui.<Button>node("checkUserButton").fire();
+                assertTrue(ui.<Label>node("feedback").getText().contains("fields are valid"));assertEquals(0,ui.fixture.operations);
+                var users=ui.<TableView<AdminData.UserRow>>node("usersTable");users.getSelectionModel().selectFirst();
+                assertEquals(AdminData.Operation.DISABLE_DEMO_USER,ui.<ComboBox<AdminData.Operation>>node("userIntent").getValue());
+                assertTrue(ui.<PasswordField>node("userPassword").getText().isEmpty());assertTrue(ui.<TextField>node("userDivision").getText().isEmpty());
+                assertTrue(ui.<Button>node("activateUserButton").isDisabled());assertFalse(ui.<Button>node("disableUserButton").isDisabled());
+                users.getSelectionModel().select(1);assertTrue(ui.<Button>node("activateUserButton").isDisabled());assertTrue(ui.<Button>node("disableUserButton").isDisabled());
+                ui.<TextField>node("officeParentId").setText(UUID.randomUUID().toString());ui.<TableView<AdminData.OfficeRow>>node("officesTable").getSelectionModel().selectFirst();
+                assertTrue(ui.<TextField>node("officeParentId").getText().isEmpty());
+                assertTrue(ui.<Button>node("updateUserButton").isDisabled());assertTrue(ui.<Button>node("archiveOfficeButton").isDisabled());
+                return null;
+            });
+        }
+    }
+
     @Test void fxmlStartsLockedAndAllSixNavigationActionsWork() throws Exception {
         try (Ui ui = load(false)) {
             fx(() -> {
@@ -91,7 +123,7 @@ class AdminDashboardUiTest {
             });
         }
     }
-    @Test void nonDemoRecordsAreReadOnlyAndDisablingOrArchivingRequiresReason() throws Exception {
+    @Test void previewRecordsRemainScopedAndOnlyArchivingRequiresReason() throws Exception {
         try (Ui ui = load(true)) {
             samples(ui); enable(ui);
             fx(() -> {
@@ -100,7 +132,7 @@ class AdminDashboardUiTest {
                 ui.<Button>node("checkUserButton").fire(); assertTrue(ui.<Label>node("feedback").getText().contains("Other accounts are read only"));
                 users.getSelectionModel().selectFirst(); assertFalse(ui.<Button>node("updateUserButton").isDisabled());
                 ui.<ComboBox<AdminData.Operation>>node("userIntent").setValue(AdminData.Operation.DISABLE_DEMO_USER); ui.<Button>node("checkUserButton").fire();
-                assertTrue(ui.<Label>node("feedback").getText().contains("Enter a reason"));
+                assertTrue(ui.<Label>node("feedback").getText().contains("fields are valid"));
                 TableView<AdminData.OfficeRow> offices = ui.node("officesTable"); offices.getSelectionModel().selectLast();
                 assertTrue(ui.<Button>node("updateOfficeButton").isDisabled()); ui.<Button>node("checkOfficeButton").fire(); assertTrue(ui.<Label>node("feedback").getText().contains("Other offices are read only"));
                 offices.getSelectionModel().selectFirst(); ui.<ComboBox<AdminData.Operation>>node("officeIntent").setValue(AdminData.Operation.ARCHIVE_DEMO_OFFICE); ui.<Button>node("checkOfficeButton").fire();

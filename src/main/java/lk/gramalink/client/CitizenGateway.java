@@ -13,6 +13,7 @@ import java.util.concurrent.atomic.AtomicLong;
 /** Uses the login connection. Never opens another socket or constructs backend payloads. */
 public final class CitizenGateway implements CitizenWorkspace, AutoCloseable {
     public interface Listener {
+        default void onLoading(boolean loading) { }
         default void onRecovery(ClientReliability.State state) { }
         default void onUpdate(CitizenData.Update update) { }
         default void onStatus(NetworkClient.Status status) { }
@@ -20,6 +21,17 @@ public final class CitizenGateway implements CitizenWorkspace, AutoCloseable {
     }
     private final Object authorizationLock = new Object();
     private final AtomicLong sessionEpoch = new AtomicLong();
+    private volatile ClientFiles files;
+    void bindFiles(ClientFiles files){this.files=files;}
+    @Override public boolean supportsFiles(){return protocol.loadsBackend() && isCitizenAuthorized() && files!=null;}
+    @Override public CompletableFuture<String> upload(String requestId,java.nio.file.Path path){
+        if(!supportsFiles())return CompletableFuture.failedFuture(new SecurityException("Fresh file authorization is required."));
+        return files.upload(requestId,path).thenApply(id->{refresh();return id;});
+    }
+    @Override public CompletableFuture<java.nio.file.Path> download(String requestId,String documentId,java.nio.file.Path destination){
+        if(!supportsFiles())return CompletableFuture.failedFuture(new SecurityException("Fresh file authorization is required."));
+        return files.download(requestId,documentId,destination);
+    }
     private final NetworkClient client;
     private final CitizenProtocol protocol;
     private final Executor callbacks;
@@ -68,7 +80,13 @@ public final class CitizenGateway implements CitizenWorkspace, AutoCloseable {
     /** Receiver entry point; decode work stays off the UI thread. */
     void incoming(Message message) {
         if (!isCitizenAuthorized()) return;
+        // NetworkClient already routes correlated replies to their command/query future.
+        if (message.correlationId() != null) return;
         final long epoch = sessionEpoch.get();
+        if (protocol.loadsBackend() && message.correlationId() == null && java.util.Set.of(
+                MessageType.NEW_REQUEST, MessageType.REQUEST_UPDATED, MessageType.NOTIFICATION, MessageType.CHAT_MESSAGE).contains(message.type())) {
+            refresh(); return; // Events are refresh hints; only authorized query results become UI state.
+        }
         if (message.type() == MessageType.ACK) return; // Transport receipt is not persistence.
         if (message.type() == MessageType.ERROR) {
             publish(epoch, true, target -> target.onError(LoginService.describe(message))); return;
@@ -101,13 +119,59 @@ public final class CitizenGateway implements CitizenWorkspace, AutoCloseable {
         if (!isCitizenAuthorized()) throw new SecurityException("Server-confirmed Citizen authorization is required.");
     }
     public boolean supports(CitizenProtocol.Operation operation) { return isCitizenAuthorized() && protocol.supports(operation); }
+    @Override public boolean usesRegisteredDivision() { return protocol.loadsBackend(); }
     public void setListener(Listener listener) { this.listener = Objects.requireNonNull(listener); }
+    private final java.util.concurrent.atomic.AtomicBoolean refreshQueued = new java.util.concurrent.atomic.AtomicBoolean();
+    private final java.util.concurrent.atomic.AtomicBoolean refreshDirty = new java.util.concurrent.atomic.AtomicBoolean();
+    private final Map<String,Long> revisions = new ConcurrentHashMap<>();
+    @Override public boolean supportsCorrections(){return protocol.loadsBackend() && isCitizenAuthorized();}
+    @Override public CompletableFuture<Message> resubmit(String requestId,Long version,String title,String description) {
+        if(!protocol.loadsBackend() || !isCitizenAuthorized()) return CompletableFuture.failedFuture(new SecurityException("Current Citizen authorization is required."));
+        if(title==null || title.isBlank() || title.length()>160 || description==null || description.isBlank() || description.length()>5000)
+            return CompletableFuture.failedFuture(new IllegalArgumentException("Enter a correction title (1–160 characters) and description (1–5000)."));
+        long epoch=sessionEpoch.get();
+        return task(()->{
+            requireEpoch(epoch);requireCitizen();
+            if(version==null || !Objects.equals(revisions.get(requestId),version)) throw new IllegalArgumentException("Reload this request before resubmitting corrections.");
+            Message command=BackendCommands.change(requestId,version,"RESUBMIT",null);
+            command.payload().put("title",title.strip()).put("description",description.strip());
+            return client.request(command,Duration.ofSeconds(10));
+        }).thenCompose(f->f).whenComplete((reply,error)->{revisions.remove(requestId);refresh();});
+    }
+    @Override public void refresh() {
+        if (!protocol.loadsBackend() || !isCitizenAuthorized()) return;
+        refreshDirty.set(true);
+        if (!refreshQueued.compareAndSet(false, true)) return;
+        final long epoch = sessionEpoch.get();
+        publish(epoch,true,target->target.onLoading(true));
+        task(() -> {
+            try {
+                int passes=0;
+                do {
+                    refreshDirty.set(false);
+                    BackendQueries queries = new BackendQueries(client, () -> { requireEpoch(epoch); requireCitizen(); });
+                    for (CitizenData.Update update : queries.citizen(identity().orElseThrow().userId())) {
+                        if(update instanceof CitizenData.Requests snapshot){ revisions.clear();snapshot.rows().forEach(r->revisions.put(r.id(),r.version())); }
+                        publish(epoch, true, target -> target.onUpdate(update));
+                    }
+                } while (++passes<2 && refreshDirty.get() && isCitizenAuthorized() && sessionEpoch.get() == epoch);
+            } catch (IOException error) { publish(epoch, true, target -> target.onError("Refresh failed: " + error.getMessage())); }
+            finally { publish(epoch,true,target->target.onLoading(false)); refreshQueued.set(false); if (refreshDirty.get() && isCitizenAuthorized()) refresh(); }
+            return null;
+        });
+    }
 
     public CompletableFuture<Message> createRequest(CitizenData.Draft draft) {
         Objects.requireNonNull(draft);
         // Attachment negotiation fields are not agreed; never silently omit a selected attachment.
-        if (draft.attachment() != null) return CompletableFuture.failedFuture(CitizenProtocol.pending());
-        return request(CitizenProtocol.Operation.CREATE_REQUEST, () -> protocol.createRequest(draft), MessageType.CREATE_REQUEST);
+        if (draft.attachment() != null && !supportsFiles()) return CompletableFuture.failedFuture(CitizenProtocol.pending());
+        return request(CitizenProtocol.Operation.CREATE_REQUEST, () -> protocol.createRequest(draft), MessageType.CREATE_REQUEST)
+                .thenCompose(reply -> {
+                    if(draft.attachment()==null || reply.type()==MessageType.ERROR) return CompletableFuture.completedFuture(reply);
+                    String id=reply.payload().path("data").path("id").asText();
+                    if(id.isBlank())return CompletableFuture.failedFuture(new IOException("Creation response missing request ID; upload not attempted."));
+                    return upload(id,draft.attachment().path()).thenApply(documentId->reply);
+                });
     }
     public CompletableFuture<Message> sendMessage(String requestId, String text) {
         if (requestId == null || requestId.isBlank() || text == null || text.isBlank())
@@ -128,7 +192,7 @@ public final class CitizenGateway implements CitizenWorkspace, AutoCloseable {
             requireCitizen();
             requireEpoch(commandEpoch);
             return client.request(message, Duration.ofSeconds(10));
-        }).thenCompose(reply -> reply);
+        }).thenCompose(reply -> reply).thenApply(reply -> { if (protocol.loadsBackend()) refresh(); return reply; });
     }
     public CompletableFuture<CitizenData.Attachment> inspectAttachment(Path path) {
         return task(() -> {

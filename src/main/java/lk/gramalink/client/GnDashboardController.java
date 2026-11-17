@@ -16,6 +16,9 @@ import java.util.function.Function;
 
 /** GN view state. Decisions and documents change only on authoritative decoded updates. */
 public final class GnDashboardController {
+    @FXML private Button uploadDocumentButton,downloadDocumentButton,performSelectedButton;
+    @FXML private ProgressBar fileProgress;
+    @FXML private Label fileProgressLabel;
     @FXML private TabPane sections;
     @FXML private VBox workspace;
     @FXML private Button navDashboard, navRequests, navNotifications, navMessages;
@@ -35,6 +38,7 @@ public final class GnDashboardController {
     @FXML private Button verifyButton, informationButton, forwardButton, rejectButton, sendButton, checkActionButton;
     private final Map<String, GnData.Details> details = new HashMap<>();
     private static final DateTimeFormatter DATE = DateTimeFormatter.ofPattern("dd MMM yyyy, HH:mm").withZone(ZoneId.of("Asia/Colombo"));
+    private boolean loading;
     private long bindingEpoch;
     private GnWorkspace gateway;
     private Runnable returnToLogin;
@@ -62,6 +66,8 @@ public final class GnDashboardController {
         actionKind.getItems().setAll(GnData.ActionKind.VERIFY_DOCUMENT, GnData.ActionKind.REQUEST_INFORMATION,
                 GnData.ActionKind.FORWARD_TO_DS, GnData.ActionKind.REJECT_REQUEST);
         actionKind.setValue(GnData.ActionKind.REQUEST_INFORMATION);
+        actionKind.valueProperty().addListener((observable, old, selected) -> refreshActions());
+        actionNote.textProperty().addListener((observable, old, text) -> refreshActions());
         assignedRequests.getSelectionModel().selectedItemProperty().addListener((observable, old, selected) -> {
             if (synchronizing) return;
             synchronizing = true; messageRequest.getSelectionModel().select(selected); synchronizing = false;
@@ -90,6 +96,11 @@ public final class GnDashboardController {
         officerName.setText(gateway.identity().orElseThrow().displayName());
         setBusy(false); status(true); refreshActions();
         gateway.setListener(new GnGateway.Listener() {
+            public void onLoading(boolean value){Platform.runLater(()->{if(bindingCurrent(epoch,gateway)){loading=value;setBusy(busy);}});}
+            public void onFileProgress(FileTransferProgress.Snapshot snapshot){ Platform.runLater(()->{
+                if(bindingCurrent(epoch,gateway)){fileProgress.setProgress(snapshot.fraction());fileProgressLabel.setText(snapshot.detail());}
+            }); }
+
             public void onRecovery(ClientReliability.State state) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) recovery(state); }); }
             public void onUpdate(GnData.Update update) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway) && gateway.isGnAuthorized()) apply(update); }); }
             public void onStatus(NetworkClient.Status value) { Platform.runLater(() -> {
@@ -97,7 +108,12 @@ public final class GnDashboardController {
             }); }
             public void onError(String error) { Platform.runLater(() -> { if (bindingCurrent(epoch, gateway)) feedback.setText(error); }); }
         });
+        if(gateway.supports(GnData.ActionKind.RECEIVE)) actionKind.getItems().setAll(GnData.ActionKind.RECEIVE,
+                GnData.ActionKind.REVIEW,GnData.ActionKind.VERIFY_REQUEST,GnData.ActionKind.REQUEST_INFORMATION,
+                GnData.ActionKind.FORWARD_TO_DS,GnData.ActionKind.REJECT_REQUEST);
+        gateway.refresh();
     }
+    @FXML private void refreshFromServer() { if(gateway!=null) gateway.refresh(); }
     @FXML private void showDashboard() { sections.getSelectionModel().select(0); }
     @FXML private void showRequests() { sections.getSelectionModel().select(1); }
     @FXML private void showNotifications() { sections.getSelectionModel().select(2); }
@@ -144,25 +160,47 @@ public final class GnDashboardController {
         if (!online) { setBusy(false); feedback.setText("Officer authorization is unavailable. Actions are locked; return to sign in."); }
     }
     private void refreshActions() {
+        boolean fileReady=gateway!=null && gateway.supportsFiles() && !busy && assignedRequests.getSelectionModel().getSelectedItem()!=null;
+        uploadDocumentButton.setDisable(!fileReady);downloadDocumentButton.setDisable(!fileReady || documents.getSelectionModel().getSelectedItem()==null);
+        performSelectedButton.setDisable(!canPerform(actionKind.getValue()) || !selectedFieldsValid());
+
         boolean assigned = gateway != null && gateway.isGnAuthorized() && assignedRequests.getSelectionModel().getSelectedItem() != null && !busy;
         verifyButton.setDisable(!assigned || documents.getSelectionModel().getSelectedItem() == null || !gateway.supports(GnData.ActionKind.VERIFY_DOCUMENT));
-        informationButton.setDisable(!assigned || !gateway.supports(GnData.ActionKind.REQUEST_INFORMATION));
-        forwardButton.setDisable(!assigned || !gateway.supports(GnData.ActionKind.FORWARD_TO_DS));
-        rejectButton.setDisable(!assigned || !gateway.supports(GnData.ActionKind.REJECT_REQUEST));
+        informationButton.setDisable(!canPerform(GnData.ActionKind.REQUEST_INFORMATION));
+        forwardButton.setDisable(!canPerform(GnData.ActionKind.FORWARD_TO_DS));
+        rejectButton.setDisable(!canPerform(GnData.ActionKind.REJECT_REQUEST));
         sendButton.setDisable(!assigned || !gateway.supports(GnData.ActionKind.CHAT));
         checkActionButton.setDisable(!assigned);
         assignedRequests.setDisable(busy); documents.setDisable(busy); messageRequest.setDisable(busy);
         actionKind.setDisable(busy); actionNote.setDisable(busy); chatText.setDisable(busy);
     }
+    private boolean canPerform(GnData.ActionKind kind) {
+        var row = assignedRequests.getSelectionModel().getSelectedItem();
+        return gateway != null && gateway.isGnAuthorized() && !busy && !loading && kind != null && row != null
+                && gateway.permits(kind, row);
+    }
+    private boolean selectedFieldsValid() {
+        if (actionKind.getValue() == null) return false;
+        try {
+            GnData.Action selected = action(actionKind.getValue());
+            return selected.note().length() <= 1000;
+        } catch (IllegalArgumentException exception) { return false; }
+    }
     private GnData.Action action(GnData.ActionKind kind) {
+        if (kind == null) throw new IllegalArgumentException("Select an officer action first.");
         GnData.RequestRow selected = assignedRequests.getSelectionModel().getSelectedItem();
         GnData.Document document = documents.getSelectionModel().getSelectedItem();
         return new GnData.Action(kind, selected == null ? null : selected.id(), document == null ? null : document.id(),
-                kind == GnData.ActionKind.CHAT ? chatText.getText() : actionNote.getText());
+                kind == GnData.ActionKind.CHAT ? chatText.getText() : actionNote.getText(), selected == null ? null : selected.version());
     }
+    @FXML private void performSelectedAction() { if(actionKind.getValue()!=null) perform(actionKind.getValue()); }
     @FXML private void checkAction() {
         try {
-            gateway.requireGnOfficer(); action(actionKind.getValue());
+            gateway.requireGnOfficer();
+            GnData.Action selected = action(actionKind.getValue());
+            if (selected.note().length() > 1000) throw new IllegalArgumentException("Officer notes must contain at most 1000 characters.");
+            if (gateway.supports(selected.kind()) && !canPerform(selected.kind()))
+                throw new IllegalArgumentException("This action is unavailable for the current request status or version. Refresh the assigned request.");
             feedback.setText("Action fields are valid. Nothing has been sent or changed.");
         } catch (IllegalArgumentException | SecurityException error) { feedback.setText(error.getMessage()); }
     }
@@ -188,7 +226,7 @@ public final class GnDashboardController {
         } catch (IllegalArgumentException | SecurityException error) { setBusy(false); feedback.setText(error.getMessage()); }
     }
     private void setBusy(boolean value) {
-        busy = value; busyIndicator.setVisible(value); activityLabel.setText(value ? "Waiting for the officer service…" : ""); refreshActions();
+        busy = value; busyIndicator.setVisible(value || loading); activityLabel.setText(value ? "Waiting for the officer service…" : ""); refreshActions();
     }
 
     private void apply(GnData.Update update) {
@@ -234,6 +272,33 @@ public final class GnDashboardController {
             conversation.getItems().setAll(data.messages().stream().map(entry -> DATE.format(entry.at()) + "  |  " + entry.sender() + "\n" + entry.text()).toList());
         }
         refreshActions();
+    }
+
+    @FXML private void uploadDocument(){
+        var row=assignedRequests.getSelectionModel().getSelectedItem();
+        if(row==null || !gateway.supportsFiles()){feedback.setText("Select a request with current server authorization.");return;}
+        var chooser=new javafx.stage.FileChooser();chooser.setTitle("Upload a plain PDF supporting document");
+        chooser.getExtensionFilters().add(new javafx.stage.FileChooser.ExtensionFilter("PDF documents","*.pdf"));
+        var file=chooser.showOpenDialog(assignedRequests.getScene().getWindow());if(file==null)return;
+        fileOperation(gateway.upload(row.id(),file.toPath()),true);
+    }
+    @FXML private void downloadDocument(){
+        var row=assignedRequests.getSelectionModel().getSelectedItem();var document=documents.getSelectionModel().getSelectedItem();
+        if(row==null || document==null || !gateway.supportsFiles()){feedback.setText("Select an authorized request and document.");return;}
+        var chooser=new javafx.stage.FileChooser();chooser.setTitle("Save verified download to a new file");chooser.setInitialFileName(document.fileName());
+        var file=chooser.showSaveDialog(assignedRequests.getScene().getWindow());if(file==null)return;
+        fileOperation(gateway.download(row.id(),document.id(),file.toPath()),false);
+    }
+    private void fileOperation(java.util.concurrent.CompletableFuture<?> future,boolean upload){
+        long epoch=bindingEpoch;var source=gateway;setBusy(true);
+        future.whenComplete((result,error)->Platform.runLater(()->{
+            if(!bindingCurrent(epoch,source))return;setBusy(false);
+            if(!source.isGnAuthorized()){status(false);return;}
+            String detail;
+            if(error!=null){Throwable cause=error;while(cause instanceof java.util.concurrent.CompletionException && cause.getCause()!=null)cause=cause.getCause();detail=cause.getMessage();}
+            else detail=upload ? "STORED: backend confirmed document "+result : "Download checksum verified and saved: "+result;
+            feedback.setText(detail);fileProgressLabel.setText(detail);
+        }));
     }
     @FXML private void signOut() {
         bindingEpoch++; active = false; workspace.setDisable(true); gateway.setListener(new GnGateway.Listener() { });

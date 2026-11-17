@@ -56,6 +56,7 @@ public final class LoginController implements AutoCloseable {
                     feedbackLabel.setText("The server returned ambiguous workspace permissions. Please contact your administrator.");
                     return;
                 }
+                if (authorizedWorkspaces == 1) feedbackLabel.setText("Signed in successfully.");
                 service.citizenGateway().ifPresent(gateway -> {
                     try { CitizenDashboardView.open((Stage) loginButton.getScene().getWindow(), gateway); }
                     catch (java.io.IOException | SecurityException failure) {
@@ -86,6 +87,8 @@ public final class LoginController implements AutoCloseable {
                 while (cause instanceof CompletionException && cause.getCause() != null) cause = cause.getCause();
                 feedbackLabel.setText(cause instanceof TimeoutException
                         ? "The server did not reply in time. Try again."
+                        : cause instanceof SecurityException && cause.getMessage() != null
+                        ? cause.getMessage()
                         : "Unable to complete login. Check the server address, port, and server availability.");
             }
         }));
